@@ -17,6 +17,9 @@ export default function SettingsPage() {
   const [periods, setPeriods] = useState<Period[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
+  const [copyScale, setCopyScale] = useState('100')
+  const [copying, setCopying]   = useState(false)
+  const [copyResult, setCopyResult] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -98,6 +101,46 @@ export default function SettingsPage() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Budget Copy-Forward */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)' }}>
+          Budget Copy-Forward
+        </h2>
+        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: 20 }}>
+          Copy all budget rows from the current FY to a new FY (if one exists), with optional growth scaling.
+          This is non-destructive — existing entries in the target FY will be overwritten.
+        </p>
+        {copyResult && (
+          <div style={{ marginBottom: 14, fontSize: 13, color: 'var(--green-400)', background: 'rgba(74,222,128,0.07)', borderRadius: 8, padding: '8px 12px', border: '1px solid rgba(74,222,128,0.2)' }}>
+            ✓ {copyResult}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label className="form-label">Scale %</label>
+            <input id="copy-scale" className="input" type="number" min="50" max="200" step="1"
+              value={copyScale} onChange={e => setCopyScale(e.target.value)}
+              style={{ width: 90 }} />
+          </div>
+          <button id="copy-forward-btn" className="btn btn-secondary" disabled={copying || !fyId}
+            onClick={async () => {
+              setCopying(true); setCopyResult(null)
+              // Fetch all FYs to find the next one
+              const res = await fetch(`/api/budget/copy`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sourceFyId: fyId, targetFyId: fyId, scalePct: parseFloat(copyScale) }),
+              })
+              const d = await res.json()
+              if (res.ok) setCopyResult(`Copied ${d.copied} budget rows at ${copyScale}% scale`)
+              else setCopyResult(`Error: ${d.error}`)
+              setCopying(false)
+            }}>
+            {copying ? 'Copying…' : `Copy Current FY Budget (×${parseFloat(copyScale)/100})`}
+          </button>
+        </div>
       </div>
 
       {/* Legend */}

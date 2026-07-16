@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 
-const MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar']
+const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
 type PLRow = { code: string; name: string; type: string; parentId: string | null; budget: number; actual: number; allowed: number; variance: number }
 
@@ -12,15 +12,15 @@ function fmtN(n: number) {
 }
 
 export default function ReportsPage() {
-  const [fyId, setFyId]     = useState('')
+  const [fyId, setFyId] = useState('')
   const [fyLabel, setFyLabel] = useState('')
-  const [plData, setPlData]   = useState<PLRow[][]>([]) // one array per month
+  const [plData, setPlData] = useState<PLRow[][]>([]) // one array per month
   const [loading, setLoading] = useState(true)
-  const [report, setReport]   = useState<'consolidated' | 'monthly-trend'>('consolidated')
+  const [report, setReport] = useState<'consolidated' | 'monthly-trend'>('consolidated')
 
   useEffect(() => {
     async function load() {
-      const fyRes  = await fetch('/api/fy/active')
+      const fyRes = await fetch('/api/fy/active')
       const fyData = await fyRes.json()
       if (!fyData?.id) { setLoading(false); return }
       setFyId(fyData.id)
@@ -60,8 +60,8 @@ export default function ReportsPage() {
 
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
     a.href = url; a.download = `MIS_Actuals_${fyLabel}.csv`; a.click()
     URL.revokeObjectURL(url)
   }
@@ -76,7 +76,7 @@ export default function ReportsPage() {
         <div style={{ display: 'flex', gap: 10 }}>
           <button id="reports-export-csv" className="btn btn-secondary" onClick={downloadCSV}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
             </svg>
             Export CSV
           </button>
@@ -114,7 +114,7 @@ export default function ReportsPage() {
                   return r ? r.actual : 0
                 })
                 const ytd = monthActuals.reduce((s, v) => s + v, 0)
-                const isTotal = !row.parentId || ['GROSS_PROFIT','NET_PROFIT'].includes(row.code)
+                const isTotal = !row.parentId || ['GROSS_PROFIT', 'NET_PROFIT'].includes(row.code)
 
                 return (
                   <tr key={row.code} className={isTotal ? 'row-total' : ''}>
@@ -141,8 +141,8 @@ export default function ReportsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {KEY_ROWS.map(code => {
             const label = (plData[0] ?? []).find(r => r.code === code)?.name ?? code
-            const vals  = plData.map(mr => mr.find(r => r.code === code)?.actual ?? 0)
-            const max   = Math.max(...vals, 1)
+            const vals = plData.map(mr => mr.find(r => r.code === code)?.actual ?? 0)
+            const max = Math.max(...vals, 1)
             return (
               <div key={code} className="card">
                 <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>{label}</p>

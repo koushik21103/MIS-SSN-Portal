@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { PLBarChart } from '@/components/charts/PLCharts'
 
-const MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar']
+const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
 type PLRow = {
   accountHeadId: string; code: string; name: string; type: string
@@ -16,7 +17,7 @@ function fmtCr(n: number) {
   if (n === 0) return '—'
   const abs = Math.abs(n)
   if (abs >= 1_00_00_000) return `${n < 0 ? '-' : ''}${(abs / 1_00_00_000).toFixed(2)}Cr`
-  if (abs >= 1_00_000)    return `${n < 0 ? '-' : ''}${(abs / 1_00_000).toFixed(2)}L`
+  if (abs >= 1_00_000) return `${n < 0 ? '-' : ''}${(abs / 1_00_000).toFixed(2)}L`
   return n.toLocaleString('en-IN', { maximumFractionDigits: 0 })
 }
 
@@ -26,11 +27,11 @@ function fmtPct(n: number) {
 }
 
 const TYPE_SECTIONS = [
-  { type: 'REVENUE',          label: 'Sales / Revenue',    subtotal: 'SALES_TOTAL' },
-  { type: 'COGS',             label: 'Cost of Sales',       subtotal: 'COGS_TOTAL'  },
-  { type: 'DIRECT_EXPENSE',   label: 'Direct Expenses',     subtotal: 'DIREXP_TOTAL' },
-  { type: 'INDIRECT_INCOME',  label: 'Indirect Income',     subtotal: 'INDINC_TOTAL' },
-  { type: 'INDIRECT_EXPENSE', label: 'Indirect Expenses',   subtotal: 'INDEXP_TOTAL' },
+  { type: 'REVENUE', label: 'Sales / Revenue', subtotal: 'SALES_TOTAL' },
+  { type: 'COGS', label: 'Cost of Sales', subtotal: 'COGS_TOTAL' },
+  { type: 'DIRECT_EXPENSE', label: 'Direct Expenses', subtotal: 'DIREXP_TOTAL' },
+  { type: 'INDIRECT_INCOME', label: 'Indirect Income', subtotal: 'INDINC_TOTAL' },
+  { type: 'INDIRECT_EXPENSE', label: 'Indirect Expenses', subtotal: 'INDEXP_TOTAL' },
 ]
 
 function VarBadge({ value, type }: { value: number; type: string }) {
@@ -45,24 +46,25 @@ function VarBadge({ value, type }: { value: number; type: string }) {
 }
 
 export default function MISPage() {
-  const [fyId, setFyId]     = useState('')
+  const [fyId, setFyId] = useState('')
   const [fyLabel, setFyLabel] = useState('')
-  const [month, setMonth]   = useState(1)
-  const [view, setView]     = useState<'monthly' | 'ytd'>('monthly')
-  const [rows, setRows]     = useState<PLRow[]>([])
+  const [month, setMonth] = useState(1)
+  const [view, setView] = useState<'monthly' | 'ytd'>('monthly')
+  const [showChart, setShowChart] = useState(false)
+  const [rows, setRows] = useState<PLRow[]>([])
   const [budgetRev, setBudgetRev] = useState(0)
   const [actualRev, setActualRev] = useState(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function loadFY() {
-      const res  = await fetch('/api/fy/active')
+      const res = await fetch('/api/fy/active')
       const data = await res.json()
       if (data?.id) {
         setFyId(data.id)
         setFyLabel(data.label)
         const now = new Date()
-        const fm  = now.getMonth() >= 3 ? now.getMonth() - 2 : now.getMonth() + 10
+        const fm = now.getMonth() >= 3 ? now.getMonth() - 2 : now.getMonth() + 10
         setMonth(Math.min(fm, 12))
       }
     }
@@ -85,12 +87,12 @@ export default function MISPage() {
   // Group rows by type, keep parent rows and child rows separate
   const rowMap = Object.fromEntries(rows.map(r => [r.code, r]))
 
-  const b = (r: PLRow) => view === 'monthly' ? r.budget    : r.budgetYTD
-  const a = (r: PLRow) => view === 'monthly' ? r.actual    : r.actualYTD
-  const al= (r: PLRow) => view === 'monthly' ? r.allowed   : r.allowedYTD
-  const v = (r: PLRow) => view === 'monthly' ? r.variance  : r.varianceYTD
-  const pb= (r: PLRow) => r.pctBudget
-  const pa= (r: PLRow) => r.pctActual
+  const b = (r: PLRow) => view === 'monthly' ? r.budget : r.budgetYTD
+  const a = (r: PLRow) => view === 'monthly' ? r.actual : r.actualYTD
+  const al = (r: PLRow) => view === 'monthly' ? r.allowed : r.allowedYTD
+  const v = (r: PLRow) => view === 'monthly' ? r.variance : r.varianceYTD
+  const pb = (r: PLRow) => r.pctBudget
+  const pa = (r: PLRow) => r.pctActual
 
   const colStyle: React.CSSProperties = { minWidth: 110, fontVariantNumeric: 'tabular-nums' }
 
@@ -103,6 +105,17 @@ export default function MISPage() {
           <p className="page-subtitle">FY {fyLabel} · Budget vs Actual vs Allowed vs Variance</p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {/* Chart toggle */}
+          <button id="mis-chart-toggle"
+            onClick={() => setShowChart(c => !c)}
+            className={`btn ${showChart ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: 12.5, padding: '7px 12px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="14" height="14">
+              <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" />
+            </svg>
+            Chart
+          </button>
           {/* View toggle */}
           <div style={{ display: 'flex', background: 'var(--surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
             {(['monthly', 'ytd'] as const).map(v => (
@@ -111,7 +124,7 @@ export default function MISPage() {
                 style={{
                   padding: '7px 14px', fontSize: 12.5, fontWeight: 500,
                   background: view === v ? 'rgba(99,102,241,0.15)' : 'transparent',
-                  color:      view === v ? 'var(--indigo-400)' : 'var(--text-secondary)',
+                  color: view === v ? 'var(--indigo-400)' : 'var(--text-secondary)',
                   border: 'none', cursor: 'pointer',
                 }}
               >
@@ -125,6 +138,26 @@ export default function MISPage() {
           </select>
         </div>
       </div>
+
+      {/* Chart panel */}
+      {showChart && !loading && (() => {
+        const SKIP = ['GROSS_PROFIT', 'NET_PROFIT', 'SALES_TOTAL', 'COGS_TOTAL', 'DIREXP_TOTAL', 'INDINC_TOTAL', 'INDEXP_TOTAL']
+        const chartRows = rows.filter(r => !SKIP.includes(r.code) && r.parentId !== null).slice(0, 12)
+        const chartData = chartRows.map(r => ({
+          month: r.name.length > 14 ? r.name.slice(0, 13) + '…' : r.name,
+          budget: view === 'monthly' ? r.budget : r.budgetYTD,
+          actual: view === 'monthly' ? r.actual : r.actualYTD,
+          allowed: view === 'monthly' ? r.allowed : r.allowedYTD,
+        }))
+        return (
+          <div className="card" style={{ marginBottom: 20 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
+              Budget vs Actual vs Allowed — {view === 'monthly' ? MONTHS[month - 1] : `YTD Apr–${MONTHS[month - 1]}`}
+            </p>
+            <PLBarChart data={chartData} height={300} />
+          </div>
+        )
+      })()}
 
       {/* Revenue KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
@@ -192,7 +225,7 @@ export default function MISPage() {
             <tbody>
               {TYPE_SECTIONS.map(section => {
                 const sectionRows = rows.filter(r => r.type === section.type && r.parentId !== null)
-                const totalRow    = rows.find(r => r.code === section.subtotal)
+                const totalRow = rows.find(r => r.code === section.subtotal)
                 if (!totalRow && !sectionRows.length) return null
 
                 return [
