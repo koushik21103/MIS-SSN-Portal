@@ -1,0 +1,266 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  FINANCE
+  CFO
+  VIEWER
+}
+
+// Type of account head in the P&L structure
+enum HeadType {
+  REVENUE
+  COGS          // Cost of Sales (purchases, stock)
+  DIRECT_EXPENSE
+  INDIRECT_INCOME
+  INDIRECT_EXPENSE
+}
+
+// Which business segment this head belongs to
+enum Segment {
+  MFG_LAB       // Manufacturing & Lab
+  DND           // Design & Development
+  CONSOLIDATED  // Appears in both / consolidated only
+}
+
+// How the Allowed value is computed
+// PRORATED: (Actual Revenue / Budget Revenue) × Budget Amount  [ALL cost items]
+// FIXED:    Always equals budget amount                         [Indirect Income items only]
+enum AllowedType {
+  PRORATED
+  FIXED
+}
+
+// WDV depreciation rates used in the Depreciation sheet
+enum DepRate {
+  FIFTEEN  // 15% — Plant, Machinery, Furniture, Vehicles
+  FORTY    // 40% — Computers, Laptops, Printers
+}
+
+// Status of a financial period (month)
+enum PeriodStatus {
+  OPEN           // Finance can enter actuals
+  PENDING_REVIEW // Finance submitted; awaiting Admin approval
+  LOCKED         // Admin approved; no edits (unless Admin unlocks)
+}
+
+// Asset movement type
+enum MvType {
+  ADDITION  // New purchase mid-year
+  DISPOSAL  // Asset sold/scrapped mid-year
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?   // hashed, for credentials provider
+  image         String?
+  role          Role      @default(VIEWER)
+  actuals       Actual[]
+  accounts      Account[]
+  sessions      Session[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  @@unique([identifier, token])
+}
+
+// ─── Financial Year & Period ──────────────────────────────────────────────────
+
+model FinancialYear {
+  id            String             @id @default(cuid())
+  label         String             @unique // "2026-2027"
+  startDate     DateTime           // 2026-04-01
+  endDate       DateTime           // 2027-03-31
+  isActive      Boolean            @default(false)
+  budgets       Budget[]
+  actuals       Actual[]
+  periods       Period[]
+  assetBalances AssetYearBalance[]
+  assetMovements AssetMovement[]
+  createdAt     DateTime           @default(now())
+}
+
+// Controls which month is open for Finance actuals entry.
+// Equivalent to the Actual!A2 cell in the Excel (month number 1–12).
+model Period {
+  id              String        @id @default(cuid())
+  financialYearId String
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  month           Int           // 1=April ... 12=March
+  status          PeriodStatus  @default(OPEN)
+  openedAt        DateTime      @default(now())
+  submittedAt     DateTime?
+  lockedAt        DateTime?
+  @@unique([financialYearId, month])
+}
+
+// ─── Account Heads (Chart of Accounts) ───────────────────────────────────────
+
+// Each row in the P&L — mirrors the rows in the Excel Budget/Actual sheets.
+// Hierarchy: parent rows (e.g. "Cost of Sales") contain child rows (e.g. "RM", "S/C", "CON").
+model AccountHead {
+  id          String        @id @default(cuid())
+  code        String        @unique  // Short code e.g. "BLDRENT", "DEPR", "ELEC"
+  name        String                 // Display name e.g. "Building Rent"
+  type        HeadType
+  segment     Segment
+  allowedType AllowedType   @default(PRORATED)
+  parentId    String?
+  parent      AccountHead?  @relation("Hierarchy", fields: [parentId], references: [id])
+  children    AccountHead[] @relation("Hierarchy")
+  sortOrder   Int           // Controls display order in P&L
+  isActive    Boolean       @default(true)
+  budgets     Budget[]
+  actuals     Actual[]
+  createdAt   DateTime      @default(now())
+}
+
+// ─── Budget ───────────────────────────────────────────────────────────────────
+
+// Annual budget per account head per financial year,
+// with pre-split monthly amounts (April=m1 … March=m12).
+// Monthly values are usually Annual ÷ 12 but can be manually adjusted.
+model Budget {
+  id              String        @id @default(cuid())
+  financialYearId String
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  accountHeadId   String
+  accountHead     AccountHead   @relation(fields: [accountHeadId], references: [id])
+  annualAmount    Decimal       @db.Decimal(15, 2)
+  // Monthly splits — April = m1, May = m2, ..., March = m12
+  m1              Decimal       @db.Decimal(15, 2) @default(0)
+  m2              Decimal       @db.Decimal(15, 2) @default(0)
+  m3              Decimal       @db.Decimal(15, 2) @default(0)
+  m4              Decimal       @db.Decimal(15, 2) @default(0)
+  m5              Decimal       @db.Decimal(15, 2) @default(0)
+  m6              Decimal       @db.Decimal(15, 2) @default(0)
+  m7              Decimal       @db.Decimal(15, 2) @default(0)
+  m8              Decimal       @db.Decimal(15, 2) @default(0)
+  m9              Decimal       @db.Decimal(15, 2) @default(0)
+  m10             Decimal       @db.Decimal(15, 2) @default(0)
+  m11             Decimal       @db.Decimal(15, 2) @default(0)
+  m12             Decimal       @db.Decimal(15, 2) @default(0)
+  isLocked        Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  @@unique([financialYearId, accountHeadId])
+}
+
+// ─── Actuals ─────────────────────────────────────────────────────────────────
+
+// One record per account head per month per financial year.
+// Only Finance can create/update these, and only for OPEN periods.
+model Actual {
+  id              String        @id @default(cuid())
+  financialYearId String
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  accountHeadId   String
+  accountHead     AccountHead   @relation(fields: [accountHeadId], references: [id])
+  month           Int           // 1=April ... 12=March
+  amount          Decimal       @db.Decimal(15, 2)
+  enteredById     String
+  enteredBy       User          @relation(fields: [enteredById], references: [id])
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  @@unique([financialYearId, accountHeadId, month])
+}
+
+// ─── Asset Register & Depreciation ──────────────────────────────────────────
+
+// Permanent master record for a fixed asset.
+// Survives across all financial years.
+// Seeded with 46 assets from the Excel Depreciation sheet.
+// New assets can be added at any time via Admin UI.
+model Asset {
+  id            String             @id @default(cuid())
+  name          String             // "AIDA 110 TON PRESS MACHINE"
+  category      String             // "Machinery", "Computer", "Vehicle", etc.
+  rateEnum      DepRate            // FIFTEEN (15% WDV) or FORTY (40% WDV)
+  purchaseDate  DateTime           // Original acquisition date
+  isActive      Boolean            @default(true) // false = disposed
+  yearBalances  AssetYearBalance[]
+  movements     AssetMovement[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+}
+
+// WDV balance per asset per financial year.
+// FY 2026-27: seeded from the Excel (openingWdv from column C of Depreciation sheet).
+// FY 2027-28+: auto-created at year rollover using previous year's closingWdv.
+// New mid-year asset: openingWdv = 0; purchase is recorded as AssetMovement (ADDITION).
+model AssetYearBalance {
+  id              String        @id @default(cuid())
+  assetId         String
+  asset           Asset         @relation(fields: [assetId], references: [id])
+  financialYearId String
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  openingWdv      Decimal       @db.Decimal(15, 2)  // WDV on April 1
+  annualDepr      Decimal?      @db.Decimal(15, 2)  // computed by engine at FY close
+  closingWdv      Decimal?      @db.Decimal(15, 2)  // openingWdv - annualDepr
+  monthlyDepr     Decimal?      @db.Decimal(15, 2)  // annualDepr / 12
+  @@unique([assetId, financialYearId])
+}
+
+// Any addition or disposal of an asset within a financial year.
+// The date determines the <180 / ≥180 days classification for pro-rating.
+model AssetMovement {
+  id              String        @id @default(cuid())
+  assetId         String
+  asset           Asset         @relation(fields: [assetId], references: [id])
+  financialYearId String
+  financialYear   FinancialYear @relation(fields: [financialYearId], references: [id])
+  type            MvType        // ADDITION | DISPOSAL
+  amount          Decimal       @db.Decimal(15, 2)
+  date            DateTime      // Actual transaction date
+  holdingDays     Int           // Days from date to March 31 of this FY (auto-computed)
+  isGte180Days    Boolean       // holdingDays >= 180 → affects depreciation rate
+  notes           String?
+  createdAt       DateTime      @default(now())
+}
