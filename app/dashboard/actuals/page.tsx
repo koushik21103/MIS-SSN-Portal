@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
 type AccountHead = { id: string; code: string; name: string; type: string; parentId: string | null; sortOrder: number }
-type Actual = { accountHeadId: string; month: number; amount: number; notes?: string }
+type Period = { month: number; status: string }
 
 const TYPE_LABELS: Record<string, string> = {
   REVENUE: 'Revenue', COGS: 'Cost of Sales', DIRECT_EXPENSE: 'Direct Expenses',
@@ -14,8 +15,7 @@ const TYPE_LABELS: Record<string, string> = {
 const TYPE_ORDER = ['REVENUE', 'COGS', 'DIRECT_EXPENSE', 'INDIRECT_INCOME', 'INDIRECT_EXPENSE']
 
 export default function ActualsPage() {
-  const [fyId, setFyId]         = useState('')
-  const [fyLabel, setFyLabel]   = useState('')
+  const { fyId, fyLabel } = useFY()
   const [month, setMonth]       = useState(1)
   const [heads, setHeads]       = useState<AccountHead[]>([])
   const [actualMap, setActualMap] = useState<Record<string, number>>({})
@@ -26,16 +26,11 @@ export default function ActualsPage() {
   const [periodStatus, setPeriodStatus] = useState<string>('OPEN')
   const [loading, setLoading]   = useState(true)
 
-  // Load FY and heads once
+  // Load heads once
   useEffect(() => {
-    async function loadFY() {
-      const fyRes  = await fetch('/api/fy/active')
-      const fyData = await fyRes.json()
-      if (!fyData?.id) { setLoading(false); return }
-      setFyId(fyData.id)
-      setFyLabel(fyData.label)
-
-      const budRes  = await fetch(`/api/budget?fyId=${fyData.id}`)
+    async function loadHeads() {
+      if (!fyId) return
+      const budRes  = await fetch(`/api/budget?fyId=${fyId}`)
       const budData = await budRes.json()
       const entryHeads = budData.heads.filter((h: AccountHead) =>
         !['GROSS_PROFIT', 'NET_PROFIT'].includes(h.code)
@@ -47,8 +42,8 @@ export default function ActualsPage() {
       const fm = now.getMonth() >= 3 ? now.getMonth() - 2 : now.getMonth() + 10
       setMonth(Math.min(fm, 12))
     }
-    loadFY()
-  }, [])
+    loadHeads()
+  }, [fyId])
 
   // Load actuals for selected month
   useEffect(() => {
@@ -87,27 +82,39 @@ export default function ActualsPage() {
     setSaved(prev => ({ ...prev, [headId]: false }))
   }
 
-  const saveRow = useCallback(async (headId: string) => {
-    if (!fyId || !dirty[headId] || periodStatus === 'LOCKED') return
-    setSaving(prev => ({ ...prev, [headId]: true }))
-    const res = await fetch('/api/actuals', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        financialYearId: fyId,
-        accountHeadId:   headId,
-        month,
-        amount:          actualMap[headId] ?? 0,
-        notes:           noteMap[headId],
-      }),
-    })
-    setSaving(prev => ({ ...prev, [headId]: false }))
-    if (res.ok) {
-      setDirty(prev => ({ ...prev, [headId]: false }))
-      setSaved(prev => ({ ...prev, [headId]: true }))
-      setTimeout(() => setSaved(prev => ({ ...prev, [headId]: false })), 2000)
-    }
-  }, [fyId, dirty, month, actualMap, noteMap, periodStatus])
+  const actualMapRef = useRef(actualMap)
+  useEffect(() => { actualMapRef.current = actualMap }, [actualMap])
+  
+  const noteMapRef = useRef(noteMap)
+  useEffect(() => { noteMapRef.current = noteMap }, [noteMap])
+  
+  const dirtyRef = useRef(dirty)
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
+
+  const saveRow = useCallback((headId: string) => {
+    if (!fyId || periodStatus === 'LOCKED') return
+    setTimeout(async () => {
+      if (!dirtyRef.current[headId]) return
+      setSaving(prev => ({ ...prev, [headId]: true }))
+      const res = await fetch('/api/actuals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          financialYearId: fyId,
+          accountHeadId:   headId,
+          month,
+          amount:          actualMapRef.current[headId] ?? 0,
+          notes:           noteMapRef.current[headId],
+        }),
+      })
+      setSaving(prev => ({ ...prev, [headId]: false }))
+      if (res.ok) {
+        setDirty(prev => ({ ...prev, [headId]: false }))
+        setSaved(prev => ({ ...prev, [headId]: true }))
+        setTimeout(() => setSaved(prev => ({ ...prev, [headId]: false })), 2000)
+      }
+    }, 150)
+  }, [fyId, month, periodStatus])
 
   const isLocked = periodStatus === 'LOCKED'
   const grouped  = heads.reduce((acc: Record<string, AccountHead[]>, h) => {
@@ -166,69 +173,143 @@ export default function ActualsPage() {
               </tr>
             </thead>
             <tbody>
-              {TYPE_ORDER.map(type => {
-                const typeHeads = grouped[type] ?? []
-                if (!typeHeads.length) return null
-                return [
-                  <tr key={`hdr-${type}`} className="row-header">
-                    <td colSpan={4}>{TYPE_LABELS[type]}</td>
-                  </tr>,
-                  ...typeHeads.map(head => {
-                    const val    = actualMap[head.id] ?? 0
-                    const isChild = !!head.parentId
-                    return (
-                      <tr key={head.id}>
-                        <td style={{ paddingLeft: isChild ? 28 : 14, fontSize: isChild ? '12.5px' : '13px', color: isChild ? 'var(--text-secondary)' : 'var(--text-primary)' }}>
-                          {head.name}
-                        </td>
-                        <td style={{ padding: '3px 6px' }}>
-                          <input
-                            type="text"
-                            id={`actual-${head.code}`}
-                            disabled={isLocked}
-                            defaultValue={val > 0 ? val.toLocaleString('en-IN') : ''}
-                            onFocus={e => e.target.select()}
-                            onChange={e => handleChange(head.id, e.target.value)}
-                            onBlur={() => saveRow(head.id)}
-                            placeholder="0"
-                            aria-label={`${head.name} actual amount`}
-                            className="input"
-                            style={{ maxWidth: 170, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: isLocked ? 0.5 : 1 }}
-                          />
-                        </td>
-                        <td style={{ padding: '3px 6px' }}>
-                          <input
-                            type="text"
-                            id={`note-${head.code}`}
-                            disabled={isLocked}
-                            defaultValue={noteMap[head.id] ?? ''}
-                            onChange={e => {
-                              setNoteMap(prev => ({ ...prev, [head.id]: e.target.value }))
-                              setDirty(prev => ({ ...prev, [head.id]: true }))
-                            }}
-                            onBlur={() => saveRow(head.id)}
-                            placeholder="Optional note…"
-                            className="input"
-                            style={{ opacity: isLocked ? 0.5 : 1 }}
-                          />
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          {saving[head.id] ? (
-                            <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{ color: 'var(--text-muted)' }}>
-                              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                            </svg>
-                          ) : saved[head.id] ? (
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
-                            </svg>
-                          ) : null}
-                        </td>
-                      </tr>
-                    )
-                  }),
-                ]
-              })}
+              {(() => {
+                const getRowVal = (code: string) => actualMap[heads.find(x => x.code === code)?.id ?? ''] ?? 0
+                const getChildrenSum = (parentCode: string) => {
+                  const p = heads.find(x => x.code === parentCode)
+                  if (!p) return 0
+                  return heads.filter(h => h.parentId === p.id).reduce((sum, h) => sum + (actualMap[h.id] ?? 0), 0)
+                }
+
+                const totalSales = getRowVal('SALES_MFG') + getRowVal('SALES_DND')
+                const purchObj = getRowVal('PURCH_RM') + getRowVal('PURCH_SC') + getRowVal('PURCH_CON')
+                const consumpObj = getRowVal('OPEN_STOCK') + purchObj - getRowVal('CLOSE_STOCK')
+                const dirExpObj = getChildrenSum('DIREXP_TOTAL')
+                const cogsObj = consumpObj + dirExpObj
+                const gpObj = totalSales - cogsObj
+                const indIncObj = getChildrenSum('INDINC_TOTAL')
+                const indExpObj = getChildrenSum('INDEXP_TOTAL')
+                const npObj = gpObj + indIncObj - indExpObj
+
+                const renderRowByCode = (code: string) => {
+                  const head = heads.find(h => h.code === code)
+                  if (!head) return null
+                  const val = actualMap[head.id] ?? 0
+                  const isChild = !!head.parentId
+
+                  // Read-only logic is handled on the budget side, but actuals are fully enterable here, except cross-sheet we don't have them yet, or do we?
+                  // Actually, the user enters actuals on the actuals page! So no read-only here unless locked.
+                  
+                  return (
+                    <tr key={head.id}>
+                      <td style={{
+                        position: 'sticky', left: 0, background: 'var(--surface-2)', zIndex: 1,
+                        paddingLeft: isChild ? 28 : 14, fontSize: isChild ? '12.5px' : '13px',
+                        color: isChild ? 'var(--text-secondary)' : 'var(--text-primary)',
+                      }}>
+                        {head.name}
+                      </td>
+                      <td style={{ padding: '3px 6px' }}>
+                        <input
+                          type="text"
+                          id={`actual-${head.code}`}
+                          disabled={isLocked}
+                          defaultValue={val !== 0 ? val.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''}
+                          onFocus={e => e.target.select()}
+                          onChange={e => handleChange(head.id, e.target.value)}
+                          onBlur={() => saveRow(head.id)}
+                          placeholder="—"
+                          aria-label={`${head.name} actual amount`}
+                          className="input"
+                          style={{ maxWidth: 170, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: isLocked ? 0.5 : 1 }}
+                        />
+                      </td>
+                      <td style={{ padding: '3px 6px' }}>
+                        <input
+                          type="text"
+                          id={`note-${head.code}`}
+                          disabled={isLocked}
+                          defaultValue={noteMap[head.id] ?? ''}
+                          onChange={e => {
+                            setNoteMap(prev => ({ ...prev, [head.id]: e.target.value }))
+                            setDirty(prev => ({ ...prev, [head.id]: true }))
+                          }}
+                          onBlur={() => saveRow(head.id)}
+                          placeholder="Optional note…"
+                          className="input"
+                          style={{ opacity: isLocked ? 0.5 : 1 }}
+                        />
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        {saving[head.id] ? (
+                          <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{ color: 'var(--text-muted)' }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        ) : saved[head.id] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )
+                }
+
+                const renderSubtotalRow = (label: string, computed: number, level: 'primary' | 'secondary' | 'tertiary' = 'secondary') => {
+                  let bg = 'var(--surface-3)'
+                  let color = 'var(--text-primary)'
+                  let highlight = 'var(--indigo-400)'
+                  
+                  if (level === 'primary') {
+                    bg = 'var(--indigo-600)'
+                    color = '#fff'
+                    highlight = '#fff'
+                  } else if (level === 'tertiary') {
+                    bg = 'var(--surface-2)'
+                  }
+
+                  return (
+                    <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
+                      <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
+                      <td style={{ textAlign: 'right', padding: '6px 20px', color: highlight, fontVariantNumeric: 'tabular-nums' }}>
+                        {computed !== 0 ? computed.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
+                      </td>
+                      <td></td>
+                      <td></td>
+                    </tr>
+                  )
+                }
+
+                const dirExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'DIREXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+                const indIncChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDINC_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+                const indExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDEXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+
+                return (
+                  <>
+                    {renderSubtotalRow('Sales Accounts', totalSales, 'secondary')}
+                    {renderRowByCode('SALES_MFG')}
+                    {renderRowByCode('SALES_DND')}
+
+                    {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
+                    {renderRowByCode('OPEN_STOCK')}
+                    {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
+                    {renderRowByCode('PURCH_RM')}
+                    {renderRowByCode('PURCH_SC')}
+                    {renderRowByCode('PURCH_CON')}
+                    {renderRowByCode('CLOSE_STOCK')}
+                    {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
+                    
+                    {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
+                    {dirExpChildren.map(h => renderRowByCode(h.code))}
+                    
+                    {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
+
+                    {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}
+                    {indIncChildren.map(h => renderRowByCode(h.code))}
+
+                    {renderSubtotalRow('Indirect Expenses', indExpObj, 'secondary')}
+                    {indExpChildren.map(h => renderRowByCode(h.code))}
+
+                    {renderSubtotalRow('Net Profit', npObj, 'primary')}
+                  </>
+                )
+              })()}
             </tbody>
           </table>
         </div>

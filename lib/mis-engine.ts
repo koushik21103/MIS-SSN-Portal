@@ -30,11 +30,12 @@ import type { AllowedType, HeadType } from '@prisma/client'
 export function computeAllowed(
   allowedType: AllowedType,
   budgetAmount: number,
+  actualAmount: number,
   budgetRevenue: number,
   actualRevenue: number,
 ): number {
   if (allowedType === 'FIXED') return budgetAmount
-  if (budgetRevenue === 0) return budgetAmount // avoid division by zero
+  if (budgetRevenue === 0) return budgetAmount // fallback to budget if no budget revenue
   return (actualRevenue / budgetRevenue) * budgetAmount
 }
 
@@ -132,24 +133,44 @@ export function buildPLRows(params: {
     const monthKey = `m${month}` as keyof typeof budgetRecord
     const budget   = (budgetRecord[monthKey] as number) ?? 0
     const actual   = actualRecord[month] ?? 0
-    const allowed  = computeAllowed(head.allowedType, budget, budgetRevenue, actualRevenue)
-    const variance = computeVariance(allowed, actual, head.type)
+    // YTD actuals
+    let actualYTD = 0
+    if (head.code === 'OPEN_STOCK') {
+      actualYTD = actualRecord[1] ?? 0
+    } else if (head.code === 'CLOSE_STOCK') {
+      actualYTD = actualRecord[month] ?? 0
+    } else {
+      actualYTD = computeYTD(actualRecord, month)
+    }
 
-    // YTD: sum months 1 → current month
     const budgetYTD = computeYTD(
       Object.fromEntries(Array.from({ length: 12 }, (_, i) => [i + 1, (budgetRecord[`m${i + 1}` as keyof typeof budgetRecord] as number) ?? 0])),
       month,
     )
-    const actualYTD = computeYTD(actualRecord, month)
 
-    // YTD allowed: sum per-month allowed values using per-month revenues (accurate proration)
+    let allowed = 0
     let allowedYTD = 0
-    for (let m = 1; m <= month; m++) {
-      const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
-      const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
-      const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
-      allowedYTD  += computeAllowed(head.allowedType, bAmt, bRev, aRev)
+
+    if (head.code === 'OPEN_STOCK' || head.code === 'CLOSE_STOCK') {
+      // not prorated - allowed mirrors actuals
+      allowed = actual
+      allowedYTD = actualYTD
+    } else if (head.type === 'REVENUE') {
+      // not for sale accounts - allowed typically mirrors budget or actual, Excel uses Actual
+      allowed = actual
+      allowedYTD = actualYTD
+    } else {
+      allowed  = computeAllowed(head.allowedType, budget, actual, budgetRevenue, actualRevenue)
+      for (let m = 1; m <= month; m++) {
+        const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
+        const aAmt   = actualRecord[m] ?? 0
+        const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
+        const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
+        allowedYTD  += computeAllowed(head.allowedType, bAmt, aAmt, bRev, aRev)
+      }
     }
+
+    const variance = computeVariance(allowed, actual, head.type)
     const varianceYTD = computeVariance(allowedYTD, actualYTD, head.type)
 
     const pctBudget = computePctOfSales(budget, budgetRevenue)

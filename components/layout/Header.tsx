@@ -2,6 +2,7 @@
 
 import { signOut } from 'next-auth/react'
 import type { Role } from '@prisma/client'
+import { useFY } from '@/components/FYProvider'
 
 const MONTH_NAMES = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
@@ -14,14 +15,30 @@ export default function Header({
   const now = new Date()
   const fiscalMonth = now.getMonth() >= 3 ? now.getMonth() - 3 : now.getMonth() + 9
   const monthLabel = MONTH_NAMES[fiscalMonth]
+  const { fyId, setFyId, availableFys, loading } = useFY()
 
   return (
     <header className="dashboard-header" id="dashboard-header">
       {/* Left: Page context */}
       <div className="header-left">
-        <div className="header-period">
+        <div className="header-period" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="period-dot" />
-          <span className="period-label">Active period: <strong>{monthLabel} 2026</strong></span>
+          <span className="period-label">Active month: <strong>{monthLabel}</strong></span>
+          <span style={{ color: 'var(--text-muted)' }}>|</span>
+          {loading ? (
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading FY...</span>
+          ) : (
+            <select 
+              className="input" 
+              style={{ padding: '2px 28px 2px 8px', height: 28, fontSize: 12.5, width: 'auto', minWidth: 140 }}
+              value={fyId}
+              onChange={e => setFyId(e.target.value)}
+            >
+              {availableFys.map(f => (
+                <option key={f.id} value={f.id}>{f.label} {f.isActive ? '(Active)' : ''}</option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 

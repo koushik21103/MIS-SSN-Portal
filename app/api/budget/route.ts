@@ -29,18 +29,9 @@ export async function GET(req: NextRequest) {
 const budgetSchema = z.object({
   financialYearId: z.string(),
   accountHeadId:   z.string(),
-  m1:  z.number().min(0).default(0),
-  m2:  z.number().min(0).default(0),
-  m3:  z.number().min(0).default(0),
-  m4:  z.number().min(0).default(0),
-  m5:  z.number().min(0).default(0),
-  m6:  z.number().min(0).default(0),
-  m7:  z.number().min(0).default(0),
-  m8:  z.number().min(0).default(0),
-  m9:  z.number().min(0).default(0),
-  m10: z.number().min(0).default(0),
-  m11: z.number().min(0).default(0),
-  m12: z.number().min(0).default(0),
+  baseAmount:      z.number().nullable().optional(),
+  growthRate:      z.number().nullable().optional(),
+  annualAmount:    z.number().optional(), // For manual entry without base/growth
 })
 
 // POST /api/budget — upsert a budget row (Admin only)
@@ -54,14 +45,37 @@ export async function POST(req: NextRequest) {
   const parsed = budgetSchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
 
-  const { financialYearId, accountHeadId, ...months } = parsed.data
+  const { financialYearId, accountHeadId, baseAmount, growthRate, annualAmount } = parsed.data
 
-  const annual = Object.values(months).reduce((sum, v) => sum + v, 0)
+  if (annualAmount == null) {
+    return NextResponse.json({ error: 'annualAmount is required' }, { status: 400 })
+  }
+
+  const head = await prisma.accountHead.findUnique({ where: { id: accountHeadId } })
+  if (!head) return NextResponse.json({ error: 'Account head not found' }, { status: 404 })
+
+  const isStock = head.code === 'OPEN_STOCK' || head.code === 'CLOSE_STOCK'
+
+  // Ensure two decimal precision
+  const finalAnnual = Number(annualAmount.toFixed(2))
+  
+  // Split evenly into 12 months, let m12 absorb the rounding difference
+  const monthlyVal = isStock ? 0 : Number((finalAnnual / 12).toFixed(2))
+  const m12Val = isStock ? 0 : Number((finalAnnual - (monthlyVal * 11)).toFixed(2))
+
+  const updateData = {
+    baseAmount: null,
+    growthRate: null,
+    annualAmount: finalAnnual,
+    m1: monthlyVal, m2: monthlyVal, m3: monthlyVal, m4: monthlyVal,
+    m5: monthlyVal, m6: monthlyVal, m7: monthlyVal, m8: monthlyVal,
+    m9: monthlyVal, m10: monthlyVal, m11: monthlyVal, m12: m12Val
+  }
 
   const budget = await prisma.budget.upsert({
     where: { financialYearId_accountHeadId: { financialYearId, accountHeadId } },
-    update: { ...months, annualAmount: annual },
-    create: { financialYearId, accountHeadId, ...months, annualAmount: annual },
+    update: updateData,
+    create: { financialYearId, accountHeadId, ...updateData },
   })
 
   return NextResponse.json(budget)

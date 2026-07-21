@@ -173,6 +173,8 @@ model Budget {
   accountHeadId   String
   accountHead     AccountHead   @relation(fields: [accountHeadId], references: [id])
   annualAmount    Decimal       @db.Decimal(15, 2)
+  baseAmount      Decimal?      @db.Decimal(15, 2)
+  growthRate      Decimal?      @db.Decimal(15, 2)
   // Monthly splits — April = m1, May = m2, ..., March = m12
   m1              Decimal       @db.Decimal(15, 2) @default(0)
   m2              Decimal       @db.Decimal(15, 2) @default(0)

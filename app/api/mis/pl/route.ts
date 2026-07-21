@@ -21,14 +21,22 @@ export async function GET(req: NextRequest) {
 
   const fyId  = req.nextUrl.searchParams.get('fyId')
   const month = parseInt(req.nextUrl.searchParams.get('month') ?? '1')
+  const segment = req.nextUrl.searchParams.get('segment') || 'ALL'
 
   if (!fyId || isNaN(month) || month < 1 || month > 12) {
     return NextResponse.json({ error: 'fyId and valid month (1–12) required' }, { status: 400 })
   }
 
   // ── Fetch all active account heads ─────────────────────────────────────────
+  const whereClause: any = { isActive: true }
+  if (segment === 'MFG_LAB') {
+    whereClause.segment = { in: ['MFG_LAB', 'CONSOLIDATED'] }
+  } else if (segment === 'DND') {
+    whereClause.segment = { in: ['DND', 'CONSOLIDATED'] }
+  }
+
   const heads = await prisma.accountHead.findMany({
-    where:   { isActive: true },
+    where:   whereClause,
     orderBy: { sortOrder: 'asc' },
   })
 
@@ -59,26 +67,33 @@ export async function GET(req: NextRequest) {
     actualMap[a.accountHeadId][a.month] = Number(a.amount)
   }
 
-  // ── Revenue head for proration ─────────────────────────────────────────────
-  const revenueHead = heads.find(h => h.code === 'SALES_TOTAL')
+  // ── Revenue heads for proration ────────────────────────────────────────────
+  const mfgHead = heads.find(h => h.code === 'SALES_MFG')
+  const dndHead = heads.find(h => h.code === 'SALES_DND')
+
+  const getBudRev = (m: number) => {
+    const mfg = mfgHead ? (Number((budgetMap[mfgHead.id] ?? {})[`m${m}`]) || 0) : 0
+    const dnd = dndHead ? (Number((budgetMap[dndHead.id] ?? {})[`m${m}`]) || 0) : 0
+    return mfg + dnd
+  }
+
+  const getActRev = (m: number) => {
+    const mfg = mfgHead ? (Number(actualMap[mfgHead.id]?.[m]) || 0) : 0
+    const dnd = dndHead ? (Number(actualMap[dndHead.id]?.[m]) || 0) : 0
+    return mfg + dnd
+  }
 
   // Monthly budget revenue for selected month
-  const budgetRevenue = revenueHead
-    ? ((budgetMap[revenueHead.id] ?? {})[`m${month}`] ?? 0)
-    : 0
+  const budgetRevenue = getBudRev(month)
   // Monthly actual revenue for selected month
-  const actualRevenue = revenueHead
-    ? (actualMap[revenueHead.id]?.[month] ?? 0)
-    : 0
+  const actualRevenue = getActRev(month)
 
   // ── Per-month revenue for YTD allowed proration ────────────────────────────
   const perMonthBudgetRevenue: Record<number, number> = {}
   const perMonthActualRevenue: Record<number, number> = {}
-  if (revenueHead) {
-    for (let m = 1; m <= month; m++) {
-      perMonthBudgetRevenue[m] = (budgetMap[revenueHead.id] ?? {})[`m${m}`] ?? 0
-      perMonthActualRevenue[m] = actualMap[revenueHead.id]?.[m] ?? 0
-    }
+  for (let m = 1; m <= month; m++) {
+    perMonthBudgetRevenue[m] = getBudRev(m)
+    perMonthActualRevenue[m] = getActRev(m)
   }
 
   // ── Build P&L rows ─────────────────────────────────────────────────────────

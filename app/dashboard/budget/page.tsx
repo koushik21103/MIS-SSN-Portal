@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
+import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
@@ -14,6 +15,8 @@ type Budget = {
   m1: number; m2: number; m3: number; m4: number; m5: number; m6: number;
   m7: number; m8: number; m9: number; m10: number; m11: number; m12: number;
   annualAmount: number;
+  baseAmount?: number;
+  growthRate?: number;
 }
 
 function fmt(n: number) {
@@ -28,8 +31,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 export default function BudgetPage() {
   const { data: session } = useSession()
-  const [fyId, setFyId]     = useState<string>('')
-  const [fyLabel, setFyLabel] = useState<string>('')
+  const { fyId, fyLabel } = useFY()
   const [heads, setHeads]   = useState<AccountHead[]>([])
   const [budgetMap, setBudgetMap] = useState<Record<string, Budget>>({})
   const [dirty, setDirty]   = useState<Record<string, boolean>>({})
@@ -37,16 +39,11 @@ export default function BudgetPage() {
   const [saved, setSaved]   = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
 
-  // Fetch FY and budget data
+  // Fetch budget data
   useEffect(() => {
+    if (!fyId) { setLoading(false); return }
     async function load() {
-      const fyRes  = await fetch('/api/fy/active')
-      const fyData = await fyRes.json()
-      if (!fyData?.id) { setLoading(false); return }
-      setFyId(fyData.id)
-      setFyLabel(fyData.label)
-
-      const res  = await fetch(`/api/budget?fyId=${fyData.id}`)
+      const res  = await fetch(`/api/budget?fyId=${fyId}`)
       const data = await res.json()
 
       const map: Record<string, Budget> = {}
@@ -57,6 +54,8 @@ export default function BudgetPage() {
           m5: Number(b.m5), m6: Number(b.m6), m7: Number(b.m7), m8: Number(b.m8),
           m9: Number(b.m9), m10: Number(b.m10), m11: Number(b.m11), m12: Number(b.m12),
           annualAmount: Number(b.annualAmount),
+          baseAmount: b.baseAmount != null ? Number(b.baseAmount) : undefined,
+          growthRate: b.growthRate != null ? Number(b.growthRate) : undefined,
         }
       }
       setBudgetMap(map)
@@ -74,32 +73,68 @@ export default function BudgetPage() {
     return budgetMap[headId]?.[`m${m}` as keyof Budget] as number ?? 0
   }
 
-  function handleChange(headId: string, m: number, raw: string) {
-    const val = parseFloat(raw.replace(/,/g, '')) || 0
+  function handleChange(headId: string, raw: string) {
+    const val = parseFloat(raw.replace(/,/g, ''))
+    const newAnnual = isNaN(val) ? 0 : val
+    
     setBudgetMap(prev => {
       const existing = prev[headId] ?? { accountHeadId: headId, m1:0,m2:0,m3:0,m4:0,m5:0,m6:0,m7:0,m8:0,m9:0,m10:0,m11:0,m12:0, annualAmount:0 }
-      const updated  = { ...existing, [`m${m}`]: val }
-      const annual   = Array.from({length:12}, (_,i)=> updated[`m${i+1}` as keyof Budget] as number).reduce((s,v)=>s+v,0)
-      return { ...prev, [headId]: { ...updated, annualAmount: annual } }
+      
+      const headCode = heads.find(h => h.id === headId)?.code
+      const isStock = headCode === 'OPEN_STOCK' || headCode === 'CLOSE_STOCK'
+
+      const monthlyVal = isStock ? 0 : Number((newAnnual / 12).toFixed(2));
+      const m12Val = isStock ? 0 : Number((newAnnual - (monthlyVal * 11)).toFixed(2));
+
+      return { 
+        ...prev, 
+        [headId]: { 
+          ...existing, 
+          baseAmount: undefined,
+          growthRate: undefined,
+          annualAmount: newAnnual,
+          m1: monthlyVal, m2: monthlyVal, m3: monthlyVal, m4: monthlyVal,
+          m5: monthlyVal, m6: monthlyVal, m7: monthlyVal, m8: monthlyVal,
+          m9: monthlyVal, m10: monthlyVal, m11: monthlyVal, m12: m12Val
+        } 
+      }
     })
     setDirty(prev => ({ ...prev, [headId]: true }))
     setSaved(prev => ({ ...prev, [headId]: false }))
   }
 
-  const saveRow = useCallback(async (headId: string) => {
-    if (!fyId || !dirty[headId]) return
-    setSaving(prev => ({ ...prev, [headId]: true }))
-    const b = budgetMap[headId]
-    await fetch('/api/budget', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ financialYearId: fyId, accountHeadId: headId, ...b }),
-    })
-    setSaving(prev => ({ ...prev, [headId]: false }))
-    setDirty(prev => ({ ...prev, [headId]: false }))
-    setSaved(prev => ({ ...prev, [headId]: true }))
-    setTimeout(() => setSaved(prev => ({ ...prev, [headId]: false })), 2000)
-  }, [fyId, dirty, budgetMap])
+  const budgetMapRef = useRef(budgetMap)
+  useEffect(() => { budgetMapRef.current = budgetMap }, [budgetMap])
+
+  const dirtyRef = useRef(dirty)
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
+
+  const saveRow = useCallback((headId: string) => {
+    if (!fyId) return
+    // Defer the save to ensure React state (setBudgetMap) has settled before reading the ref
+    setTimeout(async () => {
+      if (!dirtyRef.current[headId]) return
+      setSaving(prev => ({ ...prev, [headId]: true }))
+      
+      const b = budgetMapRef.current[headId]
+      if (!b) return
+      
+      try {
+        await fetch('/api/budget', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ financialYearId: fyId, ...b }),
+        })
+        setDirty(prev => ({ ...prev, [headId]: false }))
+        setSaved(prev => ({ ...prev, [headId]: true }))
+        setTimeout(() => setSaved(prev => ({ ...prev, [headId]: false })), 2000)
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setSaving(prev => ({ ...prev, [headId]: false }))
+      }
+    }, 150)
+  }, [fyId, dirty])
 
   // Group heads by type
   const grouped = heads.reduce((acc: Record<string, AccountHead[]>, h) => {
@@ -109,6 +144,59 @@ export default function BudgetPage() {
   }, {})
 
   const TYPE_ORDER = ['REVENUE', 'COGS', 'DIRECT_EXPENSE', 'INDIRECT_INCOME', 'INDIRECT_EXPENSE']
+
+  const sumObjs = (a: any, b: any) => ({
+    annual: (a?.annual || 0) + (b?.annual || 0),
+    m1: (a?.m1 || 0) + (b?.m1 || 0), m2: (a?.m2 || 0) + (b?.m2 || 0), m3: (a?.m3 || 0) + (b?.m3 || 0), m4: (a?.m4 || 0) + (b?.m4 || 0), 
+    m5: (a?.m5 || 0) + (b?.m5 || 0), m6: (a?.m6 || 0) + (b?.m6 || 0), m7: (a?.m7 || 0) + (b?.m7 || 0), m8: (a?.m8 || 0) + (b?.m8 || 0), 
+    m9: (a?.m9 || 0) + (b?.m9 || 0), m10: (a?.m10 || 0) + (b?.m10 || 0), m11: (a?.m11 || 0) + (b?.m11 || 0), m12: (a?.m12 || 0) + (b?.m12 || 0),
+  })
+
+  const subObjs = (a: any, b: any) => ({
+    annual: (a?.annual || 0) - (b?.annual || 0),
+    m1: (a?.m1 || 0) - (b?.m1 || 0), m2: (a?.m2 || 0) - (b?.m2 || 0), m3: (a?.m3 || 0) - (b?.m3 || 0), m4: (a?.m4 || 0) - (b?.m4 || 0), 
+    m5: (a?.m5 || 0) - (b?.m5 || 0), m6: (a?.m6 || 0) - (b?.m6 || 0), m7: (a?.m7 || 0) - (b?.m7 || 0), m8: (a?.m8 || 0) - (b?.m8 || 0), 
+    m9: (a?.m9 || 0) - (b?.m9 || 0), m10: (a?.m10 || 0) - (b?.m10 || 0), m11: (a?.m11 || 0) - (b?.m11 || 0), m12: (a?.m12 || 0) - (b?.m12 || 0),
+  })
+
+  const sumMulti = (...objs: any[]) => objs.reduce((acc, obj) => sumObjs(acc, obj), { annual: 0, m1: 0, m2: 0, m3: 0, m4: 0, m5: 0, m6: 0, m7: 0, m8: 0, m9: 0, m10: 0, m11: 0, m12: 0 })
+
+  const getRowVal = (code: string) => {
+    const h = heads.find(x => x.code === code)
+    if (!h) return { annual: 0, m1: 0, m2: 0, m3: 0, m4: 0, m5: 0, m6: 0, m7: 0, m8: 0, m9: 0, m10: 0, m11: 0, m12: 0 }
+    const b = budgetMap[h.id]
+    if (!b) return { annual: 0, m1: 0, m2: 0, m3: 0, m4: 0, m5: 0, m6: 0, m7: 0, m8: 0, m9: 0, m10: 0, m11: 0, m12: 0 }
+    return {
+      annual: b.annualAmount || 0,
+      m1: b.m1 || 0, m2: b.m2 || 0, m3: b.m3 || 0, m4: b.m4 || 0,
+      m5: b.m5 || 0, m6: b.m6 || 0, m7: b.m7 || 0, m8: b.m8 || 0,
+      m9: b.m9 || 0, m10: b.m10 || 0, m11: b.m11 || 0, m12: b.m12 || 0,
+    }
+  }
+
+  const getChildrenSum = (parentCode: string) => {
+    const p = heads.find(x => x.code === parentCode)
+    if (!p) return { annual: 0, m1: 0, m2: 0, m3: 0, m4: 0, m5: 0, m6: 0, m7: 0, m8: 0, m9: 0, m10: 0, m11: 0, m12: 0 }
+    const children = heads.filter(h => h.parentId === p.id)
+    return children.reduce((acc, h) => sumObjs(acc, getRowVal(h.code)), { annual: 0, m1: 0, m2: 0, m3: 0, m4: 0, m5: 0, m6: 0, m7: 0, m8: 0, m9: 0, m10: 0, m11: 0, m12: 0 })
+  }
+
+  // Exact math from Excel Matrix
+  const salesObj = sumMulti(getRowVal('SALES_MFG'), getRowVal('SALES_DND'))
+  const totalSales = salesObj.annual
+  
+  const purchObj = sumMulti(getRowVal('PURCH_RM'), getRowVal('PURCH_SC'), getRowVal('PURCH_CON'))
+  const consumpObj = subObjs(sumMulti(getRowVal('OPEN_STOCK'), purchObj), getRowVal('CLOSE_STOCK'))
+  
+  const dirExpObj = getChildrenSum('DIREXP_TOTAL')
+  const cogsObj = sumMulti(consumpObj, dirExpObj)
+  
+  const gpObj = subObjs(salesObj, cogsObj)
+  
+  const indIncObj = getChildrenSum('INDINC_TOTAL')
+  const indExpObj = getChildrenSum('INDEXP_TOTAL')
+  
+  const npObj = subObjs(sumMulti(gpObj, indIncObj), indExpObj)
 
   if (loading) return (
     <div>
@@ -129,91 +217,148 @@ export default function BudgetPage() {
           <thead>
             <tr>
               <th style={{ textAlign: 'left', minWidth: 260, position: 'sticky', left: 0, background: 'var(--surface-1)', zIndex: 2 }}>Account Head</th>
-              {MONTHS.map((m, i) => <th key={i}>{m}</th>)}
-              <th style={{ color: 'var(--indigo-400)' }}>Annual</th>
-              <th style={{ width: 60 }}></th>
+              <th style={{ color: 'var(--indigo-400)', width: 120 }}>Annual Budget</th>
+              <th style={{ color: 'var(--text-secondary)', width: 80 }}>% of Rev</th>
+              {MONTHS.map((m, i) => <th key={i} style={{ width: 90 }}>{m}</th>)}
+              <th style={{ color: 'var(--text-secondary)', width: 80 }}>Check</th>
+              <th style={{ width: 40 }}></th>
             </tr>
           </thead>
           <tbody>
-            {TYPE_ORDER.map(type => {
-              const typeHeads = grouped[type] ?? []
-              if (!typeHeads.length) return null
-              return [
-                <tr key={`header-${type}`} className="row-header">
-                  <td colSpan={15}>{TYPE_LABELS[type]}</td>
-                </tr>,
-                ...typeHeads.map(head => {
-                  const isChild = !!head.parentId
-                  const annual  = budgetMap[head.id]?.annualAmount ?? 0
-                  return (
-                    <tr key={head.id}>
-                      <td style={{
-                        position: 'sticky', left: 0,
-                        background: 'var(--surface-2)', zIndex: 1,
-                        paddingLeft: isChild ? 28 : 14,
-                        fontSize: isChild ? '12.5px' : '13px',
-                        color: isChild ? 'var(--text-secondary)' : 'var(--text-primary)',
-                      }}>
-                        {head.name}
+            {(() => {
+              const inputStyle = {
+                width: '100%', background: 'transparent', border: '1px solid transparent', borderRadius: 5, padding: '5px 8px',
+                textAlign: 'right' as const, fontSize: '13px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums', outline: 'none'
+              }
+              const onFocusStyle = (e: React.FocusEvent<HTMLInputElement>) => {
+                e.target.style.border = '1px solid var(--indigo-500)'; e.target.style.background = 'rgba(99,102,241,0.06)'
+              }
+              const onBlurStyle = (e: React.FocusEvent<HTMLInputElement>) => {
+                e.target.style.border = '1px solid transparent'; e.target.style.background = 'transparent'
+              }
+
+              const renderRowByCode = (code: string) => {
+                const head = heads.find(h => h.code === code)
+                if (!head) return null
+                const isChild = !!head.parentId
+                const isStock = head.code === 'OPEN_STOCK' || head.code === 'CLOSE_STOCK'
+                const annual  = budgetMap[head.id]?.annualAmount ?? 0
+                const mSum = [1,2,3,4,5,6,7,8,9,10,11,12].reduce((sum, m) => sum + (budgetMap[head.id]?.[`m${m}` as keyof Budget] as number ?? 0), 0)
+                const check = isStock ? 0 : mSum - annual
+                
+                return (
+                  <tr key={head.id}>
+                    <td style={{
+                      position: 'sticky', left: 0, background: 'var(--surface-2)', zIndex: 1,
+                      paddingLeft: isChild ? 28 : 14, fontSize: isChild ? '12.5px' : '13px',
+                      color: isChild ? 'var(--text-secondary)' : 'var(--text-primary)',
+                    }}>
+                      {head.name}
+                    </td>
+                    <td style={{ padding: '3px 4px' }}>
+                      <input type="text" className="budget-cell-input"
+                        defaultValue={annual !== 0 ? annual.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''}
+                        onFocus={e => e.target.select()} onChange={e => handleChange(head.id, e.target.value)} onBlur={() => saveRow(head.id)}
+                        style={{ ...inputStyle, fontWeight: 600, color: 'var(--indigo-400)' }} onFocusCapture={onFocusStyle} onBlurCapture={onBlurStyle}
+                      />
+                    </td>
+                    <td style={{ padding: '3px 8px', textAlign: 'right', fontSize: '12px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                      {annual !== 0 && totalSales > 0 ? ((annual / totalSales) * 100).toFixed(1) + '%' : '—'}
+                    </td>
+                    {Array.from({ length: 12 }, (_, i) => {
+                      const val = budgetMap[head.id]?.[`m${i+1}` as keyof Budget] as number ?? 0
+                      return (
+                        <td key={i} style={{ padding: '3px 8px', textAlign: 'right', fontSize: '12px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                          {val !== 0 ? val.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
+                        </td>
+                      )
+                    })}
+                    <td style={{ padding: '3px 8px', textAlign: 'right', fontSize: '12px', fontVariantNumeric: 'tabular-nums', color: Math.abs(check) > 0.01 ? 'var(--red-400)' : 'var(--text-secondary)' }}>
+                      {Math.abs(check) > 0.01 ? check.toFixed(2) : '0.00'}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {saving[head.id] ? (
+                        <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{color:'var(--text-muted)'}}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25"/><path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75"/></svg>
+                      ) : saved[head.id] ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              }
+
+              const renderSubtotalRow = (label: string, computed: any, level: 'primary' | 'secondary' | 'tertiary' = 'secondary') => {
+                const annual = computed.annual
+                const pct = totalSales > 0 ? (annual / totalSales * 100) : 0
+                const check = [1,2,3,4,5,6,7,8,9,10,11,12].reduce((sum, m) => sum + (computed[`m${m}`] || 0), 0) - annual
+                
+                let bg = 'var(--surface-3)'
+                let color = 'var(--text-primary)'
+                let highlight = 'var(--indigo-400)'
+                let subtext = 'var(--text-secondary)'
+                
+                if (level === 'primary') {
+                  bg = 'var(--indigo-600)'
+                  color = '#fff'
+                  highlight = '#fff'
+                  subtext = 'rgba(255,255,255,0.7)'
+                } else if (level === 'tertiary') {
+                  bg = 'var(--surface-2)'
+                }
+
+                return (
+                  <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
+                    <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 8px', color: highlight, fontVariantNumeric: 'tabular-nums' }}>{annual !== 0 ? annual.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 8px', color: subtext, fontVariantNumeric: 'tabular-nums' }}>{pct !== 0 ? pct.toFixed(1) + '%' : '—'}</td>
+                    {Array.from({length: 12}).map((_, i) => (
+                      <td key={i} style={{ textAlign: 'right', padding: '6px 8px', color: color, fontVariantNumeric: 'tabular-nums', fontSize: '12px' }}>
+                        {computed[`m${i+1}`] !== 0 ? computed[`m${i+1}`].toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
                       </td>
-                      {Array.from({ length: 12 }, (_, i) => {
-                        const m   = i + 1
-                        const val = getValue(head.id, m)
-                        return (
-                          <td key={m} style={{ padding: '3px 4px' }}>
-                            <input
-                              type="text"
-                              className="budget-cell-input"
-                              defaultValue={val > 0 ? val.toLocaleString('en-IN') : ''}
-                              onFocus={e => e.target.select()}
-                              onChange={e => handleChange(head.id, m, e.target.value)}
-                              onBlur={() => saveRow(head.id)}
-                              id={`budget-${head.code}-m${m}`}
-                              aria-label={`${head.name} ${MONTHS[i]}`}
-                              style={{
-                                width: '100%',
-                                background: 'transparent',
-                                border: '1px solid transparent',
-                                borderRadius: 5,
-                                padding: '5px 8px',
-                                textAlign: 'right',
-                                fontSize: '13px',
-                                color: 'var(--text-primary)',
-                                fontVariantNumeric: 'tabular-nums',
-                                outline: 'none',
-                              }}
-                              onFocusCapture={e => {
-                                ;(e.target as HTMLInputElement).style.border = '1px solid var(--indigo-500)'
-                                ;(e.target as HTMLInputElement).style.background = 'rgba(99,102,241,0.06)'
-                              }}
-                              onBlurCapture={e => {
-                                ;(e.target as HTMLInputElement).style.border = '1px solid transparent'
-                                ;(e.target as HTMLInputElement).style.background = 'transparent'
-                              }}
-                            />
-                          </td>
-                        )
-                      })}
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--indigo-400)', fontSize: '13px', fontVariantNumeric: 'tabular-nums' }}>
-                        {annual > 0 ? annual.toLocaleString('en-IN') : '—'}
-                      </td>
-                      <td style={{ textAlign: 'center', width: 48 }}>
-                        {saving[head.id] ? (
-                          <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{color:'var(--text-muted)'}}>
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25"/>
-                            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75"/>
-                          </svg>
-                        ) : saved[head.id] ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/>
-                          </svg>
-                        ) : null}
-                      </td>
-                    </tr>
-                  )
-                }),
-              ]
-            })}
+                    ))}
+                    <td style={{ textAlign: 'right', padding: '6px 8px', color: Math.abs(check) > 0.01 ? (level==='primary'?'#ffb3b3':'var(--red-400)') : subtext, fontVariantNumeric: 'tabular-nums', fontSize: '12px' }}>
+                      {Math.abs(check) > 0.01 ? check.toFixed(2) : '0.00'}
+                    </td>
+                    <td></td>
+                  </tr>
+                )
+              }
+
+              // Direct Expenses children mapping
+              const dirExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'DIREXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+              const indIncChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDINC_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+              const indExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDEXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+
+              return (
+                <>
+                  {renderSubtotalRow('Sales Accounts', salesObj, 'secondary')}
+                  {renderRowByCode('SALES_MFG')}
+                  {renderRowByCode('SALES_DND')}
+
+                  {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
+                  {renderRowByCode('OPEN_STOCK')}
+                  {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
+                  {renderRowByCode('PURCH_RM')}
+                  {renderRowByCode('PURCH_SC')}
+                  {renderRowByCode('PURCH_CON')}
+                  {renderRowByCode('CLOSE_STOCK')}
+                  {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
+                  
+                  {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
+                  {dirExpChildren.map(h => renderRowByCode(h.code))}
+                  
+                  {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
+
+                  {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}
+                  {indIncChildren.map(h => renderRowByCode(h.code))}
+
+                  {renderSubtotalRow('Indirect Expenses', indExpObj, 'secondary')}
+                  {indExpChildren.map(h => renderRowByCode(h.code))}
+
+                  {renderSubtotalRow('Net Profit', npObj, 'primary')}
+                </>
+              )
+            })()}
           </tbody>
         </table>
       </div>

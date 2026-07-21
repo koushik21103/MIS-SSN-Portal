@@ -86,6 +86,14 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: 'Cannot delete yourself' }, { status: 400 })
   }
 
-  await prisma.user.delete({ where: { id } })
-  return NextResponse.json({ success: true })
+  try {
+    await prisma.user.delete({ where: { id } })
+    return NextResponse.json({ success: true })
+  } catch (error: any) {
+    // If there is a foreign key constraint failure, it's typically a Prisma client known request error
+    return NextResponse.json(
+      { error: 'Cannot delete user. They are linked to existing financial records (Actuals).' },
+      { status: 400 }
+    )
+  }
 }

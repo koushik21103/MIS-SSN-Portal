@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useFY } from '@/components/FYProvider'
 
 type AssetRow = {
   assetId: string; assetName: string; category: string; rateEnum: string; ratePct: number; isActive: boolean
@@ -21,8 +22,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 
 export default function DepreciationPage() {
-  const [fyId, setFyId]     = useState('')
-  const [fyLabel, setFyLabel] = useState('')
+  const { fyId, fyLabel } = useFY()
   const [schedule, setSchedule] = useState<AssetRow[]>([])
   const [totals, setTotals]   = useState<Totals | null>(null)
   const [loading, setLoading] = useState(true)
@@ -31,20 +31,18 @@ export default function DepreciationPage() {
 
   useEffect(() => {
     async function load() {
-      const fyRes  = await fetch('/api/fy/active')
-      const fyData = await fyRes.json()
-      if (!fyData?.id) { setLoading(false); return }
-      setFyId(fyData.id)
-      setFyLabel(fyData.label)
+      if (!fyId) return
+      setLoading(true)
 
-      const depRes  = await fetch(`/api/depreciation?fyId=${fyData.id}`)
-      const depData = await depRes.json()
-      setSchedule(depData.schedule ?? [])
-      setTotals(depData.totals ?? null)
+      const res = await fetch(`/api/depreciation?fyId=${fyId}`)
+      const data = await res.json()
+      
+      setSchedule(data.schedule || [])
+      setTotals(data.totals || { totalOpeningWdv: 0, totalAnnualDepr: 0, totalMonthlyDepr: 0, totalClosingWdv: 0 })
       setLoading(false)
     }
     load()
-  }, [])
+  }, [fyId])
 
   const categories = ['All', ...Array.from(new Set(schedule.map(a => a.category)))]
 

@@ -19,7 +19,7 @@ export default function UsersPage() {
   const [error, setError]         = useState('')
 
   async function fetchUsers() {
-    const res  = await fetch('/api/users')
+    const res  = await fetch(`/api/users?t=${Date.now()}`, { cache: 'no-store' })
     const data = await res.json()
     setUsers(Array.isArray(data) ? data : [])
     setLoading(false)
@@ -80,11 +80,17 @@ export default function UsersPage() {
 
   async function handleDelete(u: User) {
     if (!confirm(`Delete ${u.name}? This cannot be undone.`)) return
-    await fetch('/api/users', {
+    const res = await fetch('/api/users', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: u.id }),
     })
+    
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      alert(data.error || 'Failed to delete user. They may be linked to financial records.')
+    }
+    
     fetchUsers()
   }
 

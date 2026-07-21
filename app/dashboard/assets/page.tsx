@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar']
 
@@ -17,8 +18,7 @@ const RATE_OPTS = [
 const CATEGORIES = ['Machinery', 'Computer', 'Furniture', 'Vehicle', 'Equipment', 'Other']
 
 export default function AssetsPage() {
-  const [fyId, setFyId]     = useState('')
-  const [fyLabel, setFyLabel] = useState('')
+  const { fyId, fyLabel } = useFY()
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -30,22 +30,18 @@ export default function AssetsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
 
-  async function load(fyId: string) {
-    const res  = await fetch(`/api/assets?fyId=${fyId}`)
+  const loadAssets = useCallback(async () => {
+    if (!fyId) return
+    setLoading(true)
+    const res = await fetch(`/api/assets?fyId=${fyId}`)
     const data = await res.json()
     setAssets(Array.isArray(data) ? data : [])
     setLoading(false)
-  }
+  }, [fyId])
 
   useEffect(() => {
-    async function init() {
-      const res  = await fetch('/api/fy/active')
-      const data = await res.json()
-      if (data?.id) { setFyId(data.id); setFyLabel(data.label); load(data.id) }
-      else setLoading(false)
-    }
-    init()
-  }, [])
+    loadAssets()
+  }, [loadAssets])
 
   const categories = ['All', ...Array.from(new Set(assets.map(a => a.category)))]
   const filtered   = assets.filter(a => {
@@ -62,7 +58,7 @@ export default function AssetsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...addForm, openingWdv: parseFloat(addForm.openingWdv), financialYearId: fyId }),
     })
-    if (res.ok) { setShowAddModal(false); load(fyId) }
+    if (res.ok) { setShowAddModal(false); loadAssets() }
     else { const d = await res.json(); setError(d.error ?? 'Failed') }
     setSaving(false)
   }
@@ -76,7 +72,7 @@ export default function AssetsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'movement', assetId: movModal.id, financialYearId: fyId, ...movForm, amount: parseFloat(movForm.amount) }),
     })
-    if (res.ok) { setMovModal(null); load(fyId) }
+    if (res.ok) { setMovModal(null); loadAssets() }
     else { const d = await res.json(); setError(d.error ?? 'Failed') }
     setSaving(false)
   }

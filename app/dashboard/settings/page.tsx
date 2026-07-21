@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar']
-const MONTH_YEARS = MONTHS.map((m, i) => `${m} ${i < 9 ? '2026' : '2027'}`)
 
 type Period = { id: string; month: number; status: 'OPEN' | 'PENDING_REVIEW' | 'LOCKED'; financialYearId: string }
 
@@ -12,30 +12,34 @@ const STATUS_LABEL = { OPEN: 'Open', PENDING_REVIEW: 'Pending Review', LOCKED: '
 const STATUS_COLOR = { OPEN: 'role-finance', PENDING_REVIEW: 'role-cfo', LOCKED: 'role-viewer' }
 
 export default function SettingsPage() {
-  const [fyId, setFyId]     = useState('')
-  const [fyLabel, setFyLabel] = useState('')
+  const { fyId, fyLabel, availableFys, setFyId } = useFY()
   const [periods, setPeriods] = useState<Period[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
   const [copyScale, setCopyScale] = useState('100')
   const [copying, setCopying]   = useState(false)
   const [copyResult, setCopyResult] = useState<string | null>(null)
+  const [copyTargetFyId, setCopyTargetFyId] = useState('')
+  const [rollingOver, setRollingOver] = useState(false)
+  const [rolloverResult, setRolloverResult] = useState<string | null>(null)
+
+  const MONTH_YEARS = MONTHS.map((m, i) => {
+    if (!fyLabel) return m
+    const [sy, ey] = fyLabel.split('-')
+    return `${m} ${i < 9 ? sy : ey}`
+  })
 
   useEffect(() => {
     async function load() {
-      const fyRes  = await fetch('/api/fy/active')
-      const fyData = await fyRes.json()
-      if (!fyData?.id) { setLoading(false); return }
-      setFyId(fyData.id)
-      setFyLabel(fyData.label)
-
-      const pRes  = await fetch(`/api/periods?fyId=${fyData.id}`)
+      if (!fyId) return
+      setLoading(true)
+      const pRes  = await fetch(`/api/periods?fyId=${fyId}`)
       const pData = await pRes.json()
       setPeriods(pData)
       setLoading(false)
     }
     load()
-  }, [])
+  }, [fyId])
 
   async function cyclePeriodStatus(period: Period) {
     const nextStatus = STATUS_CYCLE[period.status]
@@ -103,13 +107,44 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* Financial Year Rollover */}
+      <div className="card" style={{ marginBottom: 24, borderLeft: '4px solid var(--amber-400)' }}>
+        <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)' }}>
+          Financial Year Rollover
+        </h2>
+        <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: 20 }}>
+          Close the active financial year and initialize the next one. This will automatically carry forward all Asset WDV closing balances and Opening Stocks into the new year.
+        </p>
+        {rolloverResult && (
+          <div style={{ marginBottom: 14, fontSize: 13, color: rolloverResult.startsWith('Error') ? 'var(--red-400)' : 'var(--green-400)' }}>
+            {rolloverResult}
+          </div>
+        )}
+        <button className="btn btn-primary" disabled={rollingOver || !fyId}
+          style={{ background: 'var(--amber-500)', color: '#000', fontWeight: 600 }}
+          onClick={async () => {
+            if (!confirm('Are you sure you want to close this year and generate the next financial year?')) return
+            setRollingOver(true); setRolloverResult(null)
+            const res = await fetch(`/api/fy/rollover`, { method: 'POST' })
+            const d = await res.json()
+            if (res.ok) {
+              setRolloverResult(`Success: Generated ${d.newFy.label}. Please refresh the page to update your view.`)
+            } else {
+              setRolloverResult(`Error: ${d.error}`)
+            }
+            setRollingOver(false)
+          }}>
+          {rollingOver ? 'Processing Rollover…' : 'Generate Next Financial Year'}
+        </button>
+      </div>
+
       {/* Budget Copy-Forward */}
       <div className="card" style={{ marginBottom: 24 }}>
         <h2 style={{ fontSize: '14px', fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)' }}>
           Budget Copy-Forward
         </h2>
         <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginBottom: 20 }}>
-          Copy all budget rows from the current FY to a new FY (if one exists), with optional growth scaling.
+          Copy all budget rows from the current FY ({fyLabel}) to a target FY, with optional growth scaling.
           This is non-destructive — existing entries in the target FY will be overwritten.
         </p>
         {copyResult && (
@@ -119,26 +154,34 @@ export default function SettingsPage() {
         )}
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div className="form-group" style={{ margin: 0 }}>
+            <label className="form-label">Target Year</label>
+            <select className="input" value={copyTargetFyId} onChange={e => setCopyTargetFyId(e.target.value)} style={{ width: 140 }}>
+              <option value="">-- Select --</option>
+              {availableFys.filter(f => f.id !== fyId).map(f => (
+                <option key={f.id} value={f.id}>{f.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
             <label className="form-label">Scale %</label>
             <input id="copy-scale" className="input" type="number" min="50" max="200" step="1"
               value={copyScale} onChange={e => setCopyScale(e.target.value)}
               style={{ width: 90 }} />
           </div>
-          <button id="copy-forward-btn" className="btn btn-secondary" disabled={copying || !fyId}
+          <button id="copy-forward-btn" className="btn btn-secondary" disabled={copying || !fyId || !copyTargetFyId}
             onClick={async () => {
               setCopying(true); setCopyResult(null)
-              // Fetch all FYs to find the next one
               const res = await fetch(`/api/budget/copy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sourceFyId: fyId, targetFyId: fyId, scalePct: parseFloat(copyScale) }),
+                body: JSON.stringify({ sourceFyId: fyId, targetFyId: copyTargetFyId, scalePct: parseFloat(copyScale) }),
               })
               const d = await res.json()
               if (res.ok) setCopyResult(`Copied ${d.copied} budget rows at ${copyScale}% scale`)
               else setCopyResult(`Error: ${d.error}`)
               setCopying(false)
             }}>
-            {copying ? 'Copying…' : `Copy Current FY Budget (×${parseFloat(copyScale)/100})`}
+            {copying ? 'Copying…' : `Copy Budget`}
           </button>
         </div>
       </div>

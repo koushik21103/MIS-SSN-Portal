@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { PLBarChart } from '@/components/charts/PLCharts'
+import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
@@ -46,9 +47,9 @@ function VarBadge({ value, type }: { value: number; type: string }) {
 }
 
 export default function MISPage() {
-  const [fyId, setFyId] = useState('')
-  const [fyLabel, setFyLabel] = useState('')
-  const [month, setMonth] = useState(1)
+  const { fyId, fyLabel } = useFY()
+  const [month, setMonth] = useState(0) // 0 implies uninitialized
+  const [segment, setSegment] = useState<'ALL' | 'MFG_LAB' | 'DND'>('ALL')
   const [view, setView] = useState<'monthly' | 'ytd'>('monthly')
   const [showChart, setShowChart] = useState(false)
   const [rows, setRows] = useState<PLRow[]>([])
@@ -57,32 +58,29 @@ export default function MISPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    async function loadFY() {
-      const res = await fetch('/api/fy/active')
-      const data = await res.json()
-      if (data?.id) {
-        setFyId(data.id)
-        setFyLabel(data.label)
-        const now = new Date()
-        const fm = now.getMonth() >= 3 ? now.getMonth() - 2 : now.getMonth() + 10
-        setMonth(Math.min(fm, 12))
-      }
-    }
-    loadFY()
-  }, [])
+    async function load() {
+      if (!fyId) return
+      setLoading(true)
 
-  useEffect(() => {
-    if (!fyId || !month) return
-    setLoading(true)
-    fetch(`/api/mis/pl?fyId=${fyId}&month=${month}`)
-      .then(r => r.json())
-      .then(data => {
-        setRows(data.rows ?? [])
-        setBudgetRev(data.budgetRevenue ?? 0)
-        setActualRev(data.actualRevenue ?? 0)
-        setLoading(false)
-      })
-  }, [fyId, month])
+      let selectedMonth = month
+      // Auto-select OPEN month if this is the first load for a new FY
+      if (!month) {
+        const pRes = await fetch(`/api/periods?fyId=${fyId}`)
+        const pData = await pRes.json()
+        const open = Array.isArray(pData) ? pData.find(p => p.status === 'OPEN') : null
+        selectedMonth = open ? open.month : 1
+        setMonth(selectedMonth)
+      }
+
+      const mRes = await fetch(`/api/mis/pl?fyId=${fyId}&month=${selectedMonth}&segment=${segment}`)
+      const mData = await mRes.json()
+      setRows(mData.rows || [])
+      setBudgetRev(mData.budgetRevenue || 0)
+      setActualRev(mData.actualRevenue || 0)
+      setLoading(false)
+    }
+    load()
+  }, [fyId, month, segment])
 
   // Group rows by type, keep parent rows and child rows separate
   const rowMap = Object.fromEntries(rows.map(r => [r.code, r]))
@@ -139,6 +137,12 @@ export default function MISPage() {
               </button>
             ))}
           </div>
+          {/* Segment selector */}
+          <select id="mis-segment-select" value={segment} onChange={e => setSegment(e.target.value as 'ALL' | 'MFG_LAB' | 'DND')} className="select" style={{ width: 140 }}>
+            <option value="ALL">All Segments</option>
+            <option value="MFG_LAB">MFG & Lab</option>
+            <option value="DND">D & D</option>
+          </select>
           {/* Month selector */}
           <select id="mis-month-select" value={month} onChange={e => setMonth(parseInt(e.target.value))} className="select" style={{ width: 140 }}>
             {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m} {i < 9 ? '2026' : '2027'}</option>)}
@@ -230,17 +234,59 @@ export default function MISPage() {
               </tr>
             </thead>
             <tbody>
-              {TYPE_SECTIONS.map(section => {
-                const sectionRows = rows.filter(r => r.type === section.type && r.parentId !== null)
-                const totalRow = rows.find(r => r.code === section.subtotal)
-                if (!totalRow && !sectionRows.length) return null
+              {(() => {
+                const getRow = (code: string) => rows.find(r => r.code === code)
+                
+                const sumObjs = (...objs: any[]) => objs.reduce((acc, r) => {
+                  if (!r) return acc
+                  return {
+                    budget: acc.budget + (r.budget||0),
+                    actual: acc.actual + (r.actual||0),
+                    allowed: acc.allowed + (r.allowed||0),
+                    variance: acc.variance + (r.variance||0),
+                    budgetYTD: acc.budgetYTD + (r.budgetYTD||0),
+                    actualYTD: acc.actualYTD + (r.actualYTD||0),
+                    allowedYTD: acc.allowedYTD + (r.allowedYTD||0),
+                    varianceYTD: acc.varianceYTD + (r.varianceYTD||0),
+                  }
+                }, { budget:0, actual:0, allowed:0, variance:0, budgetYTD:0, actualYTD:0, allowedYTD:0, varianceYTD:0 })
 
-                return [
-                  <tr key={`hdr-${section.type}`} className="row-header">
-                    <td colSpan={7}>{section.label}</td>
-                  </tr>,
+                const subObj = (a: any, b: any) => ({
+                  budget: (a?.budget||0) - (b?.budget||0),
+                  actual: (a?.actual||0) - (b?.actual||0),
+                  allowed: (a?.allowed||0) - (b?.allowed||0),
+                  variance: (a?.variance||0) - (b?.variance||0),
+                  budgetYTD: (a?.budgetYTD||0) - (b?.budgetYTD||0),
+                  actualYTD: (a?.actualYTD||0) - (b?.actualYTD||0),
+                  allowedYTD: (a?.allowedYTD||0) - (b?.allowedYTD||0),
+                  varianceYTD: (a?.varianceYTD||0) - (b?.varianceYTD||0),
+                })
 
-                  ...sectionRows.map(row => (
+                const salesObj = sumObjs(getRow('SALES_MFG'), getRow('SALES_DND'))
+                const purchObj = sumObjs(getRow('PURCH_RM'), getRow('PURCH_SC'), getRow('PURCH_CON'))
+                const consumpObj = subObj(sumObjs(getRow('OPEN_STOCK'), purchObj), getRow('CLOSE_STOCK'))
+                
+                const dirExpChildren = rows.filter(r => r.parentId === getRow('DIREXP_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
+                const dirExpObj = sumObjs(...dirExpChildren)
+                const cogsObj = sumObjs(consumpObj, dirExpObj)
+                const gpObj = subObj(salesObj, cogsObj)
+                gpObj.variance = gpObj.actual - gpObj.allowed
+                gpObj.varianceYTD = gpObj.actualYTD - gpObj.allowedYTD
+
+                const indIncChildren = rows.filter(r => r.parentId === getRow('INDINC_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
+                const indIncObj = sumObjs(...indIncChildren)
+                
+                const indExpChildren = rows.filter(r => r.parentId === getRow('INDEXP_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
+                const indExpObj = sumObjs(...indExpChildren)
+
+                const npObj = subObj(sumObjs(gpObj, indIncObj), indExpObj)
+                npObj.variance = npObj.actual - npObj.allowed
+                npObj.varianceYTD = npObj.actualYTD - npObj.allowedYTD
+
+                const renderRow = (code: string) => {
+                  const row = getRow(code)
+                  if (!row) return null
+                  return (
                     <tr key={row.accountHeadId}>
                       <td style={{ paddingLeft: 28, fontSize: '12.5px', color: 'var(--text-secondary)', position: 'sticky', left: 0, background: 'var(--surface-2)' }}>
                         {row.name}
@@ -252,55 +298,72 @@ export default function MISPage() {
                       <td style={{ color: 'var(--amber-400)' }}>{fmtCr(al(row))}</td>
                       <td><VarBadge value={v(row)} type={row.type} /></td>
                     </tr>
-                  )),
+                  )
+                }
 
-                  totalRow ? (
-                    <tr key={`total-${section.type}`} className="row-total">
-                      <td style={{ paddingLeft: 14, position: 'sticky', left: 0, background: 'rgba(99,102,241,0.05)' }}>
-                        {totalRow.name}
-                      </td>
-                      <td>{fmtCr(b(totalRow))}</td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtPct(pb(totalRow))}</td>
-                      <td>{fmtCr(a(totalRow))}</td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtPct(pa(totalRow))}</td>
-                      <td style={{ color: 'var(--amber-400)' }}>{fmtCr(al(totalRow))}</td>
-                      <td><VarBadge value={v(totalRow)} type={totalRow.type} /></td>
+                const renderSubtotalRow = (label: string, computed: any, level: 'primary' | 'secondary' | 'tertiary' = 'secondary') => {
+                  let bg = 'var(--surface-3)'
+                  let color = 'var(--text-primary)'
+                  let highlight = 'var(--indigo-400)'
+                  let subtext = 'var(--text-secondary)'
+                  
+                  if (level === 'primary') {
+                    bg = 'var(--indigo-600)'
+                    color = '#fff'
+                    highlight = '#fff'
+                    subtext = 'rgba(255,255,255,0.7)'
+                  } else if (level === 'tertiary') {
+                    bg = 'var(--surface-2)'
+                  }
+
+                  const revB = b(salesObj)
+                  const revA = a(salesObj)
+                  const pctB = revB ? (b(computed) / revB * 100) : 0
+                  const pctA = revA ? (a(computed) / revA * 100) : 0
+
+                  return (
+                    <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
+                      <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
+                      <td style={{ color: highlight }}>{fmtCr(b(computed))}</td>
+                      <td style={{ color: subtext, fontSize: 12 }}>{pctB !== 0 ? pctB.toFixed(1) + '%' : '—'}</td>
+                      <td style={{ color: level==='primary'?'#fff':'' }}>{fmtCr(a(computed))}</td>
+                      <td style={{ color: subtext, fontSize: 12 }}>{pctA !== 0 ? pctA.toFixed(1) + '%' : '—'}</td>
+                      <td style={{ color: level==='primary'?'#ffd54f':'var(--amber-400)' }}>{fmtCr(al(computed))}</td>
+                      <td><VarBadge value={v(computed)} type="REVENUE" /></td>
                     </tr>
-                  ) : null,
+                  )
+                }
 
-                  // Gross Profit after DIRECT_EXPENSE
-                  section.type === 'DIRECT_EXPENSE' && rowMap['GROSS_PROFIT'] ? (
-                    <tr key="gross-profit" className="row-total" style={{ background: 'rgba(99,102,241,0.08)' }}>
-                      <td style={{ position: 'sticky', left: 0, background: 'rgba(99,102,241,0.08)', color: 'var(--indigo-400)' }}>
-                        Gross Profit
-                      </td>
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(b(rowMap['GROSS_PROFIT']))}</td>
-                      <td />
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(a(rowMap['GROSS_PROFIT']))}</td>
-                      <td />
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(al(rowMap['GROSS_PROFIT']))}</td>
-                      <td><VarBadge value={v(rowMap['GROSS_PROFIT'])} type="REVENUE" /></td>
-                    </tr>
-                  ) : null,
-                ]
-              })}
+                return (
+                  <>
+                    {renderSubtotalRow('Sales Accounts', salesObj, 'secondary')}
+                    {renderRow('SALES_MFG')}
+                    {renderRow('SALES_DND')}
 
-              {/* Net Profit */}
-              {rowMap['NET_PROFIT'] && (
-                <tr className="row-total" style={{ borderTop: '2px solid rgba(99,102,241,0.3)' }}>
-                  <td style={{ position: 'sticky', left: 0, background: 'rgba(99,102,241,0.1)', fontSize: 14, color: 'var(--indigo-400)' }}>
-                    Net Profit
-                  </td>
-                  <td style={{ color: 'var(--indigo-400)', fontSize: 14 }}>{fmtCr(b(rowMap['NET_PROFIT']))}</td>
-                  <td />
-                  <td style={{ color: rowMap['NET_PROFIT'].actual >= 0 ? 'var(--green-400)' : 'var(--red-400)', fontSize: 14 }}>
-                    {fmtCr(a(rowMap['NET_PROFIT']))}
-                  </td>
-                  <td />
-                  <td style={{ color: 'var(--amber-400)', fontSize: 14 }}>{fmtCr(al(rowMap['NET_PROFIT']))}</td>
-                  <td><VarBadge value={v(rowMap['NET_PROFIT'])} type="REVENUE" /></td>
-                </tr>
-              )}
+                    {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
+                    {renderRow('OPEN_STOCK')}
+                    {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
+                    {renderRow('PURCH_RM')}
+                    {renderRow('PURCH_SC')}
+                    {renderRow('PURCH_CON')}
+                    {renderRow('CLOSE_STOCK')}
+                    {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
+                    
+                    {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
+                    {dirExpChildren.map(h => renderRow(h.code))}
+                    
+                    {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
+
+                    {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}
+                    {indIncChildren.map(h => renderRow(h.code))}
+
+                    {renderSubtotalRow('Indirect Expenses', indExpObj, 'secondary')}
+                    {indExpChildren.map(h => renderRow(h.code))}
+
+                    {renderSubtotalRow('Net Profit', npObj, 'primary')}
+                  </>
+                )
+              })()}
             </tbody>
           </table>
         </div>
