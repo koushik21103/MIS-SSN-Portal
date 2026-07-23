@@ -53,8 +53,6 @@ export default function MISPage() {
   const [view, setView] = useState<'monthly' | 'ytd'>('monthly')
   const [showChart, setShowChart] = useState(false)
   const [rows, setRows] = useState<PLRow[]>([])
-  const [budgetRev, setBudgetRev] = useState(0)
-  const [actualRev, setActualRev] = useState(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -75,8 +73,6 @@ export default function MISPage() {
       const mRes = await fetch(`/api/mis/pl?fyId=${fyId}&month=${selectedMonth}&segment=${segment}`)
       const mData = await mRes.json()
       setRows(mData.rows || [])
-      setBudgetRev(mData.budgetRevenue || 0)
-      setActualRev(mData.actualRevenue || 0)
       setLoading(false)
     }
     load()
@@ -91,8 +87,68 @@ export default function MISPage() {
   const v = (r: PLRow) => view === 'monthly' ? r.variance : r.varianceYTD
   const pb = (r: PLRow) => r.pctBudget
   const pa = (r: PLRow) => r.pctActual
+  const mfg = rowMap['SALES_MFG']
+  const dnd = rowMap['SALES_DND']
+  const bRev = (mfg ? b(mfg) : 0) + (dnd ? b(dnd) : 0)
+  const aRev = (mfg ? a(mfg) : 0) + (dnd ? a(dnd) : 0)
+
+  const getRow = (code: string) => rows.find(r => r.code === code)
+                
+  const sumObjs = (...objs: any[]) => objs.reduce((acc, r) => {
+    if (!r) return acc
+    return {
+      budget: acc.budget + (r.budget||0),
+      actual: acc.actual + (r.actual||0),
+      allowed: acc.allowed + (r.allowed||0),
+      variance: acc.variance + (r.variance||0),
+      budgetYTD: acc.budgetYTD + (r.budgetYTD||0),
+      actualYTD: acc.actualYTD + (r.actualYTD||0),
+      allowedYTD: acc.allowedYTD + (r.allowedYTD||0),
+      varianceYTD: acc.varianceYTD + (r.varianceYTD||0),
+    }
+  }, { budget:0, actual:0, allowed:0, variance:0, budgetYTD:0, actualYTD:0, allowedYTD:0, varianceYTD:0 })
+
+  const subObj = (a: any, b: any) => ({
+    budget: (a?.budget||0) - (b?.budget||0),
+    actual: (a?.actual||0) - (b?.actual||0),
+    allowed: (a?.allowed||0) - (b?.allowed||0),
+    variance: (a?.variance||0) - (b?.variance||0),
+    budgetYTD: (a?.budgetYTD||0) - (b?.budgetYTD||0),
+    actualYTD: (a?.actualYTD||0) - (b?.actualYTD||0),
+    allowedYTD: (a?.allowedYTD||0) - (b?.allowedYTD||0),
+    varianceYTD: (a?.varianceYTD||0) - (b?.varianceYTD||0),
+  })
+
+  const salesObj = sumObjs(getRow('SALES_MFG'), getRow('SALES_DND'))
+  const purchObj = sumObjs(getRow('PURCH_RM'), getRow('PURCH_SC'), getRow('PURCH_CON'))
+  const consumpObj = subObj(sumObjs(getRow('OPEN_STOCK'), purchObj), getRow('CLOSE_STOCK'))
+  
+  const dirExpChildren = rows.filter(r => r.parentId === getRow('DIREXP_TOTAL')?.accountHeadId)
+  const dirExpObj = sumObjs(...dirExpChildren)
+  const cogsObj = sumObjs(consumpObj, dirExpObj)
+  const gpObj = subObj(salesObj, cogsObj)
+  gpObj.variance = gpObj.actual - gpObj.allowed
+  gpObj.varianceYTD = gpObj.actualYTD - gpObj.allowedYTD
+
+  const indIncChildren = rows.filter(r => r.parentId === getRow('INDINC_TOTAL')?.accountHeadId)
+  const indIncObj = sumObjs(...indIncChildren)
+  
+  const indExpChildren = rows.filter(r => r.parentId === getRow('INDEXP_TOTAL')?.accountHeadId)
+  const indExpObj = sumObjs(...indExpChildren)
+
+  const npObj = subObj(sumObjs(gpObj, indIncObj), indExpObj)
+  npObj.variance = npObj.actual - npObj.allowed
+  npObj.varianceYTD = npObj.actualYTD - npObj.allowedYTD
+
+  const npActual = view === 'monthly' ? npObj.actual : npObj.actualYTD
+  const npAllowed = view === 'monthly' ? npObj.allowed : npObj.allowedYTD
+  const npBudget = view === 'monthly' ? npObj.budget : npObj.budgetYTD
+  const npVarAllowed = view === 'monthly' ? npObj.variance : npObj.varianceYTD
+  const npVarBudget = npActual - npBudget
 
   const colStyle: React.CSSProperties = { minWidth: 110, fontVariantNumeric: 'tabular-nums' }
+
+  const formatMoney = (n: number) => n === 0 ? '—' : (n < 0 ? '-₹' : '₹') + fmtCr(Math.abs(n)).replace(/^-/, '')
 
   return (
     <div>
@@ -173,44 +229,57 @@ export default function MISPage() {
       {/* Revenue KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <div className="kpi-card">
-          <p className="kpi-label">Budget Revenue ({MONTHS[month - 1]})</p>
-          <p className="kpi-value">₹{fmtCr(budgetRev)}</p>
+          <p className="kpi-label">Budget Revenue ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <p className="kpi-value">₹{fmtCr(bRev)}</p>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Actual Revenue ({MONTHS[month - 1]})</p>
-          <p className="kpi-value">₹{fmtCr(actualRev)}</p>
+          <p className="kpi-label">Actual Revenue ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <p className="kpi-value">₹{fmtCr(aRev)}</p>
           <p className="kpi-sub">
-            <span className={actualRev >= budgetRev ? 'kpi-positive' : 'kpi-negative'}>
-              {budgetRev > 0 ? ((actualRev / budgetRev) * 100).toFixed(1) + '% of budget' : '—'}
+            <span className={aRev >= bRev ? 'kpi-positive' : 'kpi-negative'}>
+              {bRev > 0 ? ((aRev / bRev) * 100).toFixed(1) + '% of budget' : '—'}
             </span>
           </p>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Variance (Revenue)</p>
-          {(() => {
-            const rev = rowMap['SALES_TOTAL']
-            const var_ = rev ? v(rev) : 0
-            return <>
-              <p className="kpi-value" style={{ color: var_ >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                ₹{fmtCr(Math.abs(var_))}
+          <p className="kpi-label">Net Profit ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>BUDGET</p>
+              <p className="kpi-value" style={{ color: npBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
+                {formatMoney(npBudget)}
               </p>
-              <p className="kpi-sub"><span className={var_ >= 0 ? 'kpi-positive' : 'kpi-negative'}>
-                {var_ >= 0 ? 'Favorable' : 'Unfavorable'}
-              </span></p>
-            </>
-          })()}
+            </div>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ACTUAL</p>
+              <p className="kpi-value" style={{ color: npActual >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
+                {formatMoney(npActual)}
+              </p>
+            </div>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ALLOWED</p>
+              <p className="kpi-value" style={{ color: npAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
+                {formatMoney(npAllowed)}
+              </p>
+            </div>
+          </div>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Net Profit (Allowed)</p>
-          {(() => {
-            const np = rowMap['NET_PROFIT']
-            const val = np ? al(np) : 0
-            return <>
-              <p className="kpi-value" style={{ color: val >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                ₹{fmtCr(Math.abs(val))}
+          <p className="kpi-label">Variance (Net Profit)</p>
+          <div style={{ display: 'flex', gap: 20, marginTop: 4 }}>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS BUDGET</p>
+              <p className="kpi-value" style={{ color: npVarBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
+                {formatMoney(npVarBudget)}
               </p>
-            </>
-          })()}
+            </div>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS ALLOWED</p>
+              <p className="kpi-value" style={{ color: npVarAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
+                {formatMoney(npVarAllowed)}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -235,54 +304,6 @@ export default function MISPage() {
             </thead>
             <tbody>
               {(() => {
-                const getRow = (code: string) => rows.find(r => r.code === code)
-                
-                const sumObjs = (...objs: any[]) => objs.reduce((acc, r) => {
-                  if (!r) return acc
-                  return {
-                    budget: acc.budget + (r.budget||0),
-                    actual: acc.actual + (r.actual||0),
-                    allowed: acc.allowed + (r.allowed||0),
-                    variance: acc.variance + (r.variance||0),
-                    budgetYTD: acc.budgetYTD + (r.budgetYTD||0),
-                    actualYTD: acc.actualYTD + (r.actualYTD||0),
-                    allowedYTD: acc.allowedYTD + (r.allowedYTD||0),
-                    varianceYTD: acc.varianceYTD + (r.varianceYTD||0),
-                  }
-                }, { budget:0, actual:0, allowed:0, variance:0, budgetYTD:0, actualYTD:0, allowedYTD:0, varianceYTD:0 })
-
-                const subObj = (a: any, b: any) => ({
-                  budget: (a?.budget||0) - (b?.budget||0),
-                  actual: (a?.actual||0) - (b?.actual||0),
-                  allowed: (a?.allowed||0) - (b?.allowed||0),
-                  variance: (a?.variance||0) - (b?.variance||0),
-                  budgetYTD: (a?.budgetYTD||0) - (b?.budgetYTD||0),
-                  actualYTD: (a?.actualYTD||0) - (b?.actualYTD||0),
-                  allowedYTD: (a?.allowedYTD||0) - (b?.allowedYTD||0),
-                  varianceYTD: (a?.varianceYTD||0) - (b?.varianceYTD||0),
-                })
-
-                const salesObj = sumObjs(getRow('SALES_MFG'), getRow('SALES_DND'))
-                const purchObj = sumObjs(getRow('PURCH_RM'), getRow('PURCH_SC'), getRow('PURCH_CON'))
-                const consumpObj = subObj(sumObjs(getRow('OPEN_STOCK'), purchObj), getRow('CLOSE_STOCK'))
-                
-                const dirExpChildren = rows.filter(r => r.parentId === getRow('DIREXP_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
-                const dirExpObj = sumObjs(...dirExpChildren)
-                const cogsObj = sumObjs(consumpObj, dirExpObj)
-                const gpObj = subObj(salesObj, cogsObj)
-                gpObj.variance = gpObj.actual - gpObj.allowed
-                gpObj.varianceYTD = gpObj.actualYTD - gpObj.allowedYTD
-
-                const indIncChildren = rows.filter(r => r.parentId === getRow('INDINC_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
-                const indIncObj = sumObjs(...indIncChildren)
-                
-                const indExpChildren = rows.filter(r => r.parentId === getRow('INDEXP_TOTAL')?.accountHeadId).sort((x,y)=>x.sortOrder-y.sortOrder)
-                const indExpObj = sumObjs(...indExpChildren)
-
-                const npObj = subObj(sumObjs(gpObj, indIncObj), indExpObj)
-                npObj.variance = npObj.actual - npObj.allowed
-                npObj.varianceYTD = npObj.actualYTD - npObj.allowedYTD
-
                 const renderRow = (code: string) => {
                   const row = getRow(code)
                   if (!row) return null

@@ -62,10 +62,13 @@ export async function GET(req: NextRequest) {
   })
 
   const actualMap: Record<string, Record<number, number>> = {}
+  const monthsWithActualsSet = new Set<number>()
   for (const a of actuals) {
     if (!actualMap[a.accountHeadId]) actualMap[a.accountHeadId] = {}
     actualMap[a.accountHeadId][a.month] = Number(a.amount)
+    monthsWithActualsSet.add(a.month)
   }
+  const monthsWithActuals = Array.from(monthsWithActualsSet)
 
   // ── Revenue heads for proration ────────────────────────────────────────────
   const mfgHead = heads.find(h => h.code === 'SALES_MFG')
@@ -114,6 +117,7 @@ export async function GET(req: NextRequest) {
     actualRevenue,
     perMonthBudgetRevenue,
     perMonthActualRevenue,
+    monthsWithActuals,
   })
 
   return NextResponse.json({

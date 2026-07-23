@@ -122,9 +122,10 @@ export function buildPLRows(params: {
   revenueHeadId?:      string
   perMonthBudgetRevenue?: Record<number, number>   // { 1: 5000, 2: 5200, … }
   perMonthActualRevenue?: Record<number, number>   // { 1: 4800, 2: 5100, … }
+  monthsWithActuals?:  number[]
 }): PLRow[] {
   const { month, budgetMap, actualMap, heads, budgetRevenue, actualRevenue,
-          perMonthBudgetRevenue, perMonthActualRevenue } = params
+          perMonthBudgetRevenue, perMonthActualRevenue, monthsWithActuals } = params
 
   return heads.map(head => {
     const budgetRecord = budgetMap[head.id] ?? {}
@@ -152,21 +153,24 @@ export function buildPLRows(params: {
     let allowedYTD = 0
 
     if (head.code === 'OPEN_STOCK' || head.code === 'CLOSE_STOCK') {
-      // not prorated - allowed mirrors actuals
-      allowed = actual
-      allowedYTD = actualYTD
-    } else if (head.type === 'REVENUE') {
-      // not for sale accounts - allowed typically mirrors budget or actual, Excel uses Actual
+      const annualBudget = (budgetRecord['annualAmount'] as number) ?? 0
+      allowed = annualBudget
+      allowedYTD = annualBudget
+    } else if (head.type === 'REVENUE' || head.type === 'INDIRECT_INCOME') {
       allowed = actual
       allowedYTD = actualYTD
     } else {
-      allowed  = computeAllowed(head.allowedType, budget, actual, budgetRevenue, actualRevenue)
+      if (!monthsWithActuals || monthsWithActuals.includes(month)) {
+        allowed = computeAllowed(head.allowedType, budget, actual, budgetRevenue, actualRevenue)
+      }
       for (let m = 1; m <= month; m++) {
-        const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
-        const aAmt   = actualRecord[m] ?? 0
-        const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
-        const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
-        allowedYTD  += computeAllowed(head.allowedType, bAmt, aAmt, bRev, aRev)
+        if (!monthsWithActuals || monthsWithActuals.includes(m)) {
+          const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
+          const aAmt   = actualRecord[m] ?? 0
+          const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
+          const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
+          allowedYTD  += computeAllowed(head.allowedType, bAmt, aAmt, bRev, aRev)
+        }
       }
     }
 

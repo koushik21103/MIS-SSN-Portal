@@ -29,6 +29,38 @@ const TYPE_LABELS: Record<string, string> = {
   INDIRECT_INCOME: 'Indirect Income', INDIRECT_EXPENSE: 'Indirect Expenses',
 }
 
+const BudgetCell = ({ value, onChange, onBlur, className, style, onFocusCapture, onBlurCapture }: any) => {
+  const [localVal, setLocalVal] = useState(value ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+
+  useEffect(() => {
+    const parsedLocal = parseFloat(localVal.replace(/,/g, '')) || 0
+    if (Math.abs(parsedLocal - (value || 0)) > 0.001) {
+      setLocalVal(value ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+    }
+  }, [value])
+
+  return (
+    <input 
+      type="text"
+      className={className}
+      value={localVal}
+      onChange={e => {
+        setLocalVal(e.target.value)
+        onChange(e.target.value)
+      }}
+      onBlur={e => {
+        const p = parseFloat(e.target.value.replace(/,/g, '')) || 0
+        setLocalVal(p ? p.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+        if (onBlur) onBlur()
+      }}
+      onFocus={e => e.target.select()}
+      style={style}
+      onFocusCapture={onFocusCapture}
+      onBlurCapture={onBlurCapture}
+    />
+  )
+}
+
 export default function BudgetPage() {
   const { data: session } = useSession()
   const { fyId, fyLabel } = useFY()
@@ -98,6 +130,24 @@ export default function BudgetPage() {
           m9: monthlyVal, m10: monthlyVal, m11: monthlyVal, m12: m12Val
         } 
       }
+    })
+    setDirty(prev => ({ ...prev, [headId]: true }))
+    setSaved(prev => ({ ...prev, [headId]: false }))
+  }
+
+  function handleMonthChange(headId: string, monthIndex: number, raw: string) {
+    const val = parseFloat(raw.replace(/,/g, ''))
+    const newMonthVal = isNaN(val) ? 0 : val
+    const mKey = `m${monthIndex}` as keyof Budget
+
+    setBudgetMap(prev => {
+      const existing = prev[headId] ?? { accountHeadId: headId, m1:0,m2:0,m3:0,m4:0,m5:0,m6:0,m7:0,m8:0,m9:0,m10:0,m11:0,m12:0, annualAmount:0 }
+      const updated = { ...existing, [mKey]: newMonthVal, baseAmount: undefined, growthRate: undefined }
+      
+      const newAnnual = [1,2,3,4,5,6,7,8,9,10,11,12].reduce((sum, m) => sum + (updated[`m${m}` as keyof Budget] as number), 0)
+      updated.annualAmount = Number(newAnnual.toFixed(2))
+
+      return { ...prev, [headId]: updated as Budget }
     })
     setDirty(prev => ({ ...prev, [headId]: true }))
     setSaved(prev => ({ ...prev, [headId]: false }))
@@ -256,9 +306,9 @@ export default function BudgetPage() {
                       {head.name}
                     </td>
                     <td style={{ padding: '3px 4px' }}>
-                      <input type="text" className="budget-cell-input"
-                        defaultValue={annual !== 0 ? annual.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''}
-                        onFocus={e => e.target.select()} onChange={e => handleChange(head.id, e.target.value)} onBlur={() => saveRow(head.id)}
+                      <BudgetCell className="budget-cell-input"
+                        value={annual}
+                        onChange={(v: string) => handleChange(head.id, v)} onBlur={() => saveRow(head.id)}
                         style={{ ...inputStyle, fontWeight: 600, color: 'var(--indigo-400)' }} onFocusCapture={onFocusStyle} onBlurCapture={onBlurStyle}
                       />
                     </td>
@@ -268,8 +318,12 @@ export default function BudgetPage() {
                     {Array.from({ length: 12 }, (_, i) => {
                       const val = budgetMap[head.id]?.[`m${i+1}` as keyof Budget] as number ?? 0
                       return (
-                        <td key={i} style={{ padding: '3px 8px', textAlign: 'right', fontSize: '12px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                          {val !== 0 ? val.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
+                        <td key={i} style={{ padding: '3px 4px' }}>
+                          <BudgetCell className="budget-cell-input"
+                            value={val}
+                            onChange={(v: string) => handleMonthChange(head.id, i + 1, v)} onBlur={() => saveRow(head.id)}
+                            style={inputStyle} onFocusCapture={onFocusStyle} onBlurCapture={onBlurStyle}
+                          />
                         </td>
                       )
                     })}
