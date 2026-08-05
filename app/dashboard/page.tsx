@@ -26,9 +26,9 @@ export default async function DashboardPage() {
   ])
 
   // Get revenue totals from Budget + Actuals
-  const mfgHead = await prisma.accountHead.findFirst({ where: { code: 'SALES_MFG' } })
-  const dndHead = await prisma.accountHead.findFirst({ where: { code: 'SALES_DND' } })
-  const revenueHeads = [mfgHead?.id, dndHead?.id].filter(Boolean) as string[]
+  const salesTotal = await prisma.accountHead.findFirst({ where: { code: 'SALES_TOTAL' } })
+  const salesChildren = salesTotal ? await prisma.accountHead.findMany({ where: { parentId: salesTotal.id } }) : []
+  const revenueHeads = salesChildren.map(c => c.id)
 
   const [budgetRevenue, actualRevenue] = await Promise.all([
     revenueHeads.length > 0 && fy

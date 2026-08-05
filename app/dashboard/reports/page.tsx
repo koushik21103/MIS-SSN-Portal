@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
-type PLRow = { code: string; name: string; type: string; parentId: string | null; budget: number; actual: number; allowed: number; variance: number }
+type PLRow = { accountHeadId: string; code: string; name: string; type: string; parentId: string | null; budget: number; actual: number; allowed: number; variance: number }
 
 function fmtN(n: number) {
   if (n === 0) return '—'
@@ -116,8 +116,35 @@ export default function ReportsPage() {
             <tbody>
               {(plData[0] ?? []).map(row => {
                 const monthActuals = plData.map(mr => {
-                  const r = mr.find(r => r.code === row.code)
-                  return r ? r.actual : 0
+                  const getAmt = (c: string) => mr.find(r => r.code === c)?.actual || 0
+                  const sumChildren = (pCode: string) => {
+                    const pId = mr.find(r => r.code === pCode)?.accountHeadId
+                    return mr.filter(r => r.parentId === pId).reduce((s, r) => s + r.actual, 0)
+                  }
+
+                  let actual = 0
+                  if (row.code === 'GROSS_PROFIT') {
+                    const sales = sumChildren('SALES_TOTAL')
+                    const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                    const cogs = consump + sumChildren('DIREXP_TOTAL')
+                    actual = sales - cogs
+                  } else if (row.code === 'NET_PROFIT') {
+                    const sales = sumChildren('SALES_TOTAL')
+                    const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                    const cogs = consump + sumChildren('DIREXP_TOTAL')
+                    const gp = sales - cogs
+                    actual = gp + sumChildren('INDINC_TOTAL') - sumChildren('INDEXP_TOTAL')
+                  } else if (row.code === 'COGS_TOTAL') {
+                    const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                    actual = consump + sumChildren('DIREXP_TOTAL')
+                  } else if (row.code === 'CONSUMPTION') {
+                    actual = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                  } else if (mr.some(r => r.parentId === row.accountHeadId)) {
+                    actual = sumChildren(row.code)
+                  } else {
+                    actual = getAmt(row.code)
+                  }
+                  return actual
                 })
                 const ytd = monthActuals.reduce((s, v) => s + v, 0)
                 const isTotal = !row.parentId || ['GROSS_PROFIT', 'NET_PROFIT'].includes(row.code)
@@ -147,7 +174,30 @@ export default function ReportsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {KEY_ROWS.map(code => {
             const label = (plData[0] ?? []).find(r => r.code === code)?.name ?? code
-            const vals = plData.map(mr => mr.find(r => r.code === code)?.actual ?? 0)
+            const vals = plData.map(mr => {
+              const getAmt = (c: string) => mr.find(r => r.code === c)?.actual || 0
+              const sumChildren = (pCode: string) => {
+                const pId = mr.find(r => r.code === pCode)?.accountHeadId
+                return mr.filter(r => r.parentId === pId).reduce((s, r) => s + r.actual, 0)
+              }
+              if (code === 'GROSS_PROFIT') {
+                const sales = sumChildren('SALES_TOTAL')
+                const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                const cogs = consump + sumChildren('DIREXP_TOTAL')
+                return sales - cogs
+              } else if (code === 'NET_PROFIT') {
+                const sales = sumChildren('SALES_TOTAL')
+                const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                const cogs = consump + sumChildren('DIREXP_TOTAL')
+                const gp = sales - cogs
+                return gp + sumChildren('INDINC_TOTAL') - sumChildren('INDEXP_TOTAL')
+              } else if (code === 'COGS_TOTAL') {
+                const consump = getAmt('OPEN_STOCK') + sumChildren('PURCH_TOTAL') - getAmt('CLOSE_STOCK')
+                return consump + sumChildren('DIREXP_TOTAL')
+              } else {
+                return sumChildren(code)
+              }
+            })
             const max = Math.max(...vals, 1)
             return (
               <div key={code} className="card">

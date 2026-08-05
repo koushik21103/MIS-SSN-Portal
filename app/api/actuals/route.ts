@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const session = await auth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const fyId  = req.nextUrl.searchParams.get('fyId')
+  const fyId = req.nextUrl.searchParams.get('fyId')
   const month = req.nextUrl.searchParams.get('month')
 
   if (!fyId) return NextResponse.json({ error: 'fyId required' }, { status: 400 })
@@ -27,10 +27,10 @@ export async function GET(req: NextRequest) {
 
 const actualSchema = z.object({
   financialYearId: z.string(),
-  accountHeadId:   z.string(),
-  month:           z.number().int().min(1).max(12),
-  amount:          z.number(),
-  notes:           z.string().optional(),
+  accountHeadId: z.string(),
+  month: z.number().int().min(1).max(12),
+  amount: z.number(),
+  notes: z.string().optional(),
 })
 
 // POST /api/actuals — upsert an actual entry (Admin or Finance)
@@ -52,6 +52,16 @@ export async function POST(req: NextRequest) {
   })
   if (period?.status === 'LOCKED') {
     return NextResponse.json({ error: 'Period is locked. Contact Admin to unlock.' }, { status: 409 })
+  }
+
+  // Linear Entry Validation
+  if (month > 1) {
+    const prevPeriod = await prisma.period.findUnique({
+      where: { financialYearId_month: { financialYearId, month: month - 1 } }
+    })
+    if (!prevPeriod?.submittedAt) {
+      return NextResponse.json({ error: `Cannot save actuals for Month ${month} until Month ${month - 1} is closed.` }, { status: 400 })
+    }
   }
 
   const actual = await prisma.actual.upsert({

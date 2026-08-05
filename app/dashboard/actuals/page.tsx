@@ -16,21 +16,23 @@ const TYPE_ORDER = ['REVENUE', 'COGS', 'DIRECT_EXPENSE', 'INDIRECT_INCOME', 'IND
 
 export default function ActualsPage() {
   const { fyId, fyLabel } = useFY()
-  const [month, setMonth]       = useState(1)
-  const [heads, setHeads]       = useState<AccountHead[]>([])
+  const [month, setMonth] = useState(1)
+  const [heads, setHeads] = useState<AccountHead[]>([])
   const [actualMap, setActualMap] = useState<Record<string, number>>({})
-  const [noteMap, setNoteMap]   = useState<Record<string, string>>({})
-  const [dirty, setDirty]       = useState<Record<string, boolean>>({})
-  const [saving, setSaving]     = useState<Record<string, boolean>>({})
-  const [saved, setSaved]       = useState<Record<string, boolean>>({})
+  const [noteMap, setNoteMap] = useState<Record<string, string>>({})
+  const [dirty, setDirty] = useState<Record<string, boolean>>({})
+  const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [saved, setSaved] = useState<Record<string, boolean>>({})
   const [periodStatus, setPeriodStatus] = useState<string>('OPEN')
-  const [loading, setLoading]   = useState(true)
+  const [currentPeriod, setCurrentPeriod] = useState<any>(null)
+  const [allPeriods, setAllPeriods] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
   // Load heads once
   useEffect(() => {
     async function loadHeads() {
       if (!fyId) return
-      const budRes  = await fetch(`/api/budget?fyId=${fyId}`)
+      const budRes = await fetch(`/api/budget?fyId=${fyId}`)
       const budData = await budRes.json()
       const entryHeads = budData.heads.filter((h: AccountHead) =>
         !['GROSS_PROFIT', 'NET_PROFIT'].includes(h.code)
@@ -60,14 +62,16 @@ export default function ActualsPage() {
       const map: Record<string, number> = {}
       const notes: Record<string, string> = {}
       for (const a of actualsData) {
-        map[a.accountHeadId]   = Number(a.amount)
+        map[a.accountHeadId] = Number(a.amount)
         if (a.notes) notes[a.accountHeadId] = a.notes
       }
       setActualMap(map)
       setNoteMap(notes)
 
+      setAllPeriods(periodsData)
       const periodForMonth = periodsData.find((p: any) => p.month === month)
       setPeriodStatus(periodForMonth?.status ?? 'OPEN')
+      setCurrentPeriod(periodForMonth)
       setDirty({})
       setSaved({})
       setLoading(false)
@@ -84,10 +88,10 @@ export default function ActualsPage() {
 
   const actualMapRef = useRef(actualMap)
   useEffect(() => { actualMapRef.current = actualMap }, [actualMap])
-  
+
   const noteMapRef = useRef(noteMap)
   useEffect(() => { noteMapRef.current = noteMap }, [noteMap])
-  
+
   const dirtyRef = useRef(dirty)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
@@ -101,10 +105,10 @@ export default function ActualsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           financialYearId: fyId,
-          accountHeadId:   headId,
+          accountHeadId: headId,
           month,
-          amount:          actualMapRef.current[headId] ?? 0,
-          notes:           noteMapRef.current[headId],
+          amount: actualMapRef.current[headId] ?? 0,
+          notes: noteMapRef.current[headId],
         }),
       })
       setSaving(prev => ({ ...prev, [headId]: false }))
@@ -116,8 +120,30 @@ export default function ActualsPage() {
     }, 150)
   }, [fyId, month, periodStatus])
 
+  async function handleCloseMonth() {
+    if (!confirm(`Are you sure you want to close Month ${month}? This unlocks the next month for entry.`)) return
+    try {
+      const res = await fetch('/api/periods/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ financialYearId: fyId, month })
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setCurrentPeriod(updated)
+        setAllPeriods(prev => prev.map(p => p.month === month ? updated : p))
+        alert('Month closed successfully.')
+      } else {
+        const error = await res.json()
+        alert(error.error || 'Failed to close month.')
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   const isLocked = periodStatus === 'LOCKED'
-  const grouped  = heads.reduce((acc: Record<string, AccountHead[]>, h) => {
+  const grouped = heads.reduce((acc: Record<string, AccountHead[]>, h) => {
     if (!acc[h.type]) acc[h.type] = []
     acc[h.type].push(h)
     return acc
@@ -141,19 +167,43 @@ export default function ActualsPage() {
             value={month}
             onChange={e => setMonth(parseInt(e.target.value))}
             className="select"
-            style={{ width: 140 }}
+            style={{ width: 170 }}
           >
-            {MONTHS.map((m, i) => (
-              <option key={i} value={i + 1}>{m} {i < 9 ? '2026' : '2027'}</option>
-            ))}
+            {MONTHS.map((m, i) => {
+              const mNum = i + 1;
+              let isDisabled = false;
+              if (mNum > 1) {
+                const prev = allPeriods.find(p => p.month === mNum - 1);
+                if (!prev || !prev.submittedAt) isDisabled = true;
+              }
+              const currentP = allPeriods.find(p => p.month === mNum);
+              if (currentP?.status === 'LOCKED') isDisabled = true;
+              
+              return (
+                <option key={i} value={mNum} disabled={isDisabled}>
+                  {m} {i < 9 ? '2026' : '2027'} {isDisabled ? '(Locked)' : ''}
+                </option>
+              )
+            })}
           </select>
+          {/* Close Month Button */}
+          {(!currentPeriod?.submittedAt || periodStatus === 'OPEN' || periodStatus === 'PENDING_REVIEW') && !isLocked && Object.keys(actualMap).length > 0 && (
+            <button 
+              onClick={handleCloseMonth}
+              disabled={!!currentPeriod?.submittedAt}
+              className="btn btn-primary"
+              style={{ padding: '6px 14px', fontSize: 13 }}
+            >
+              {currentPeriod?.submittedAt ? 'Submitted' : 'Close Month'}
+            </button>
+          )}
         </div>
       </div>
 
       {isLocked && (
         <div className="login-error" style={{ marginBottom: 20 }}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
-            <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd"/>
+            <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
           </svg>
           This period is locked. Contact Admin to unlock.
         </div>
@@ -181,8 +231,8 @@ export default function ActualsPage() {
                   return heads.filter(h => h.parentId === p.id).reduce((sum, h) => sum + (actualMap[h.id] ?? 0), 0)
                 }
 
-                const totalSales = getRowVal('SALES_MFG') + getRowVal('SALES_DND')
-                const purchObj = getRowVal('PURCH_RM') + getRowVal('PURCH_SC') + getRowVal('PURCH_CON')
+                const totalSales = getChildrenSum('SALES_TOTAL')
+                const purchObj = getChildrenSum('PURCH_TOTAL')
                 const consumpObj = getRowVal('OPEN_STOCK') + purchObj - getRowVal('CLOSE_STOCK')
                 const dirExpObj = getChildrenSum('DIREXP_TOTAL')
                 const cogsObj = consumpObj + dirExpObj
@@ -199,7 +249,7 @@ export default function ActualsPage() {
 
                   // Read-only logic is handled on the budget side, but actuals are fully enterable here, except cross-sheet we don't have them yet, or do we?
                   // Actually, the user enters actuals on the actuals page! So no read-only here unless locked.
-                  
+
                   return (
                     <tr key={head.id}>
                       <td style={{
@@ -242,9 +292,9 @@ export default function ActualsPage() {
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         {saving[head.id] ? (
-                          <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{ color: 'var(--text-muted)' }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                          <svg className="spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" width="14" height="14" style={{ color: 'var(--text-muted)' }}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                         ) : saved[head.id] ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="var(--green-400)" width="14" height="14"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                         ) : null}
                       </td>
                     </tr>
@@ -255,7 +305,7 @@ export default function ActualsPage() {
                   let bg = 'var(--surface-3)'
                   let color = 'var(--text-primary)'
                   let highlight = 'var(--indigo-400)'
-                  
+
                   if (level === 'primary') {
                     bg = 'var(--indigo-600)'
                     color = '#fff'
@@ -276,28 +326,28 @@ export default function ActualsPage() {
                   )
                 }
 
-                const dirExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'DIREXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
-                const indIncChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDINC_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
-                const indExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDEXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+                const salesChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'SALES_TOTAL')?.id).sort((a, b) => a.sortOrder - b.sortOrder)
+                const purchChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'PURCH_TOTAL')?.id).sort((a, b) => a.sortOrder - b.sortOrder)
+                const dirExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'DIREXP_TOTAL')?.id).sort((a, b) => a.sortOrder - b.sortOrder)
+                const indIncChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDINC_TOTAL')?.id).sort((a, b) => a.sortOrder - b.sortOrder)
+                const indExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDEXP_TOTAL')?.id).sort((a, b) => a.sortOrder - b.sortOrder)
 
                 return (
                   <>
                     {renderSubtotalRow('Sales Accounts', totalSales, 'secondary')}
-                    {renderRowByCode('SALES_MFG')}
-                    {renderRowByCode('SALES_DND')}
+                    {salesChildren.map(h => renderRowByCode(h.code))}
 
                     {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
                     {renderRowByCode('OPEN_STOCK')}
                     {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
-                    {renderRowByCode('PURCH_RM')}
-                    {renderRowByCode('PURCH_SC')}
-                    {renderRowByCode('PURCH_CON')}
+                    {purchChildren.map(h => renderRowByCode(h.code))}
+
                     {renderRowByCode('CLOSE_STOCK')}
                     {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
-                    
+
                     {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
                     {dirExpChildren.map(h => renderRowByCode(h.code))}
-                    
+
                     {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
 
                     {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}

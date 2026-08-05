@@ -61,29 +61,36 @@ export async function GET(req: NextRequest) {
     where: { financialYearId: fyId, month: { lte: month } },
   })
 
+  const submittedPeriods = await prisma.period.findMany({
+    where: { financialYearId: fyId, submittedAt: { not: null } }
+  })
+  const submittedMonths = new Set(submittedPeriods.map(p => p.month))
+
   const actualMap: Record<string, Record<number, number>> = {}
   const monthsWithActualsSet = new Set<number>()
   for (const a of actuals) {
     if (!actualMap[a.accountHeadId]) actualMap[a.accountHeadId] = {}
     actualMap[a.accountHeadId][a.month] = Number(a.amount)
-    monthsWithActualsSet.add(a.month)
+    if (Number(a.amount) !== 0 && submittedMonths.has(a.month)) {
+      monthsWithActualsSet.add(a.month)
+    }
   }
   const monthsWithActuals = Array.from(monthsWithActualsSet)
 
   // ── Revenue heads for proration ────────────────────────────────────────────
-  const mfgHead = heads.find(h => h.code === 'SALES_MFG')
-  const dndHead = heads.find(h => h.code === 'SALES_DND')
+  const salesTotal = heads.find(h => h.code === 'SALES_TOTAL')
+  const revenueHeads = salesTotal ? heads.filter(h => h.parentId === salesTotal.id) : []
 
   const getBudRev = (m: number) => {
-    const mfg = mfgHead ? (Number((budgetMap[mfgHead.id] ?? {})[`m${m}`]) || 0) : 0
-    const dnd = dndHead ? (Number((budgetMap[dndHead.id] ?? {})[`m${m}`]) || 0) : 0
-    return mfg + dnd
+    return revenueHeads.reduce((sum, h) => {
+      return sum + (Number((budgetMap[h.id] ?? {})[`m${m}`]) || 0)
+    }, 0)
   }
 
   const getActRev = (m: number) => {
-    const mfg = mfgHead ? (Number(actualMap[mfgHead.id]?.[m]) || 0) : 0
-    const dnd = dndHead ? (Number(actualMap[dndHead.id]?.[m]) || 0) : 0
-    return mfg + dnd
+    return revenueHeads.reduce((sum, h) => {
+      return sum + (Number(actualMap[h.id]?.[m]) || 0)
+    }, 0)
   }
 
   // Monthly budget revenue for selected month

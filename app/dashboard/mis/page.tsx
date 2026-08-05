@@ -87,12 +87,13 @@ export default function MISPage() {
   const v = (r: PLRow) => view === 'monthly' ? r.variance : r.varianceYTD
   const pb = (r: PLRow) => r.pctBudget
   const pa = (r: PLRow) => r.pctActual
-  const mfg = rowMap['SALES_MFG']
-  const dnd = rowMap['SALES_DND']
-  const bRev = (mfg ? b(mfg) : 0) + (dnd ? b(dnd) : 0)
-  const aRev = (mfg ? a(mfg) : 0) + (dnd ? a(dnd) : 0)
-
   const getRow = (code: string) => rows.find(r => r.code === code)
+
+  const salesChildren = rows.filter(r => r.parentId === getRow('SALES_TOTAL')?.accountHeadId)
+  const purchChildren = rows.filter(r => r.parentId === getRow('PURCH_TOTAL')?.accountHeadId)
+
+  const bRev = salesChildren.reduce((sum, h) => sum + (h ? b(h) : 0), 0)
+  const aRev = salesChildren.reduce((sum, h) => sum + (h ? a(h) : 0), 0)
                 
   const sumObjs = (...objs: any[]) => objs.reduce((acc, r) => {
     if (!r) return acc
@@ -119,8 +120,8 @@ export default function MISPage() {
     varianceYTD: (a?.varianceYTD||0) - (b?.varianceYTD||0),
   })
 
-  const salesObj = sumObjs(getRow('SALES_MFG'), getRow('SALES_DND'))
-  const purchObj = sumObjs(getRow('PURCH_RM'), getRow('PURCH_SC'), getRow('PURCH_CON'))
+  const salesObj = sumObjs(...salesChildren)
+  const purchObj = sumObjs(...purchChildren)
   const consumpObj = subObj(sumObjs(getRow('OPEN_STOCK'), purchObj), getRow('CLOSE_STOCK'))
   
   const dirExpChildren = rows.filter(r => r.parentId === getRow('DIREXP_TOTAL')?.accountHeadId)
@@ -358,15 +359,14 @@ export default function MISPage() {
                 return (
                   <>
                     {renderSubtotalRow('Sales Accounts', salesObj, 'secondary')}
-                    {renderRow('SALES_MFG')}
-                    {renderRow('SALES_DND')}
+                    {salesChildren.map(h => renderRow(h.code))}
 
                     {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
                     {renderRow('OPEN_STOCK')}
+                    
                     {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
-                    {renderRow('PURCH_RM')}
-                    {renderRow('PURCH_SC')}
-                    {renderRow('PURCH_CON')}
+                    {purchChildren.map(h => renderRow(h.code))}
+                    
                     {renderRow('CLOSE_STOCK')}
                     {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
                     

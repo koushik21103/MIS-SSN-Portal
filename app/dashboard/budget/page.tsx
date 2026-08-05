@@ -153,6 +153,51 @@ export default function BudgetPage() {
     setSaved(prev => ({ ...prev, [headId]: false }))
   }
 
+  async function handleRename(id: string, name: string) {
+    if (!name.trim()) return
+    const orig = heads.find(h => h.id === id)
+    if (orig && orig.name === name) return
+    setHeads(prev => prev.map(h => h.id === id ? { ...h, name } : h))
+    try {
+      await fetch('/api/account-heads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name })
+      })
+    } catch (e) { console.error(e) }
+  }
+
+  async function handleAddRow(parentCode: string, type: string) {
+    const parentId = heads.find(h => h.code === parentCode)?.id
+    if (!parentId) return
+    try {
+      const res = await fetch('/api/account-heads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Item', parentId, type })
+      })
+      const data = await res.json()
+      if (data.head) {
+        setHeads(prev => [...prev, data.head].sort((a, b) => a.sortOrder - b.sortOrder))
+      }
+    } catch (e) { console.error(e) }
+  }
+
+  async function handleDeleteRow(id: string) {
+    if (!confirm('Are you sure you want to delete this row? This will also remove any budget data entered for it.')) return
+    
+    // Optimistically remove from UI
+    setHeads(prev => prev.filter(h => h.id !== id))
+    
+    try {
+      await fetch(`/api/account-heads?id=${id}`, {
+        method: 'DELETE'
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
   const budgetMapRef = useRef(budgetMap)
   useEffect(() => { budgetMapRef.current = budgetMap }, [budgetMap])
 
@@ -232,10 +277,10 @@ export default function BudgetPage() {
   }
 
   // Exact math from Excel Matrix
-  const salesObj = sumMulti(getRowVal('SALES_MFG'), getRowVal('SALES_DND'))
+  const salesObj = getChildrenSum('SALES_TOTAL')
   const totalSales = salesObj.annual
   
-  const purchObj = sumMulti(getRowVal('PURCH_RM'), getRowVal('PURCH_SC'), getRowVal('PURCH_CON'))
+  const purchObj = getChildrenSum('PURCH_TOTAL')
   const consumpObj = subObjs(sumMulti(getRowVal('OPEN_STOCK'), purchObj), getRowVal('CLOSE_STOCK'))
   
   const dirExpObj = getChildrenSum('DIREXP_TOTAL')
@@ -302,8 +347,32 @@ export default function BudgetPage() {
                       position: 'sticky', left: 0, background: 'var(--surface-2)', zIndex: 1,
                       paddingLeft: isChild ? 28 : 14, fontSize: isChild ? '12.5px' : '13px',
                       color: isChild ? 'var(--text-secondary)' : 'var(--text-primary)',
+                      display: 'flex', alignItems: 'center'
                     }}>
-                      {head.name}
+                      {isChild && (
+                        <button 
+                          className="delete-row-btn"
+                          onClick={() => handleDeleteRow(head.id)}
+                          title="Delete Row"
+                        >
+                          <span className="delete-row-icon">×</span>
+                          <span className="delete-row-text">Delete</span>
+                        </button>
+                      )}
+                      <span style={{ flex: 1 }}>
+                        {isChild && !isStock ? (
+                          <input type="text"
+                            defaultValue={head.name}
+                            onBlur={e => handleRename(head.id, e.target.value)}
+                            style={{
+                              background: 'transparent', border: 'none', color: 'inherit',
+                              fontSize: 'inherit', width: '100%', outline: 'none'
+                            }}
+                          />
+                        ) : (
+                          head.name
+                        )}
+                      </span>
                     </td>
                     <td style={{ padding: '3px 4px' }}>
                       <BudgetCell className="budget-cell-input"
@@ -378,36 +447,51 @@ export default function BudgetPage() {
                 )
               }
 
-              // Direct Expenses children mapping
+              // Children mapping
+              const salesChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'SALES_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
+              const purchChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'PURCH_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
               const dirExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'DIREXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
               const indIncChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDINC_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
               const indExpChildren = heads.filter(h => h.parentId === heads.find(p => p.code === 'INDEXP_TOTAL')?.id).sort((a,b)=>a.sortOrder-b.sortOrder)
 
+              const AddRowBtn = ({ parentCode, type }: { parentCode: string, type: string }) => (
+                <tr>
+                  <td colSpan={16} style={{ paddingLeft: 28, paddingBottom: 12, paddingTop: 6, borderBottom: 'none' }}>
+                    <button onClick={() => handleAddRow(parentCode, type)} className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 8px', borderRadius: 4, opacity: 0.7 }}>
+                      + Add Row
+                    </button>
+                  </td>
+                </tr>
+              )
+
               return (
                 <>
                   {renderSubtotalRow('Sales Accounts', salesObj, 'secondary')}
-                  {renderRowByCode('SALES_MFG')}
-                  {renderRowByCode('SALES_DND')}
+                  {salesChildren.map(h => renderRowByCode(h.code))}
+                  <AddRowBtn parentCode="SALES_TOTAL" type="REVENUE" />
 
                   {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
                   {renderRowByCode('OPEN_STOCK')}
                   {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
-                  {renderRowByCode('PURCH_RM')}
-                  {renderRowByCode('PURCH_SC')}
-                  {renderRowByCode('PURCH_CON')}
+                  {purchChildren.map(h => renderRowByCode(h.code))}
+                  <AddRowBtn parentCode="PURCH_TOTAL" type="COGS" />
+                  
                   {renderRowByCode('CLOSE_STOCK')}
                   {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
                   
                   {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
                   {dirExpChildren.map(h => renderRowByCode(h.code))}
+                  <AddRowBtn parentCode="DIREXP_TOTAL" type="DIRECT_EXPENSE" />
                   
                   {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
 
                   {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}
                   {indIncChildren.map(h => renderRowByCode(h.code))}
+                  <AddRowBtn parentCode="INDINC_TOTAL" type="INDIRECT_INCOME" />
 
                   {renderSubtotalRow('Indirect Expenses', indExpObj, 'secondary')}
                   {indExpChildren.map(h => renderRowByCode(h.code))}
+                  <AddRowBtn parentCode="INDEXP_TOTAL" type="INDIRECT_EXPENSE" />
 
                   {renderSubtotalRow('Net Profit', npObj, 'primary')}
                 </>
@@ -420,6 +504,53 @@ export default function BudgetPage() {
       <style>{`
         .budget-cell-input:hover { border-color: rgba(99,102,241,0.3) !important; background: rgba(99,102,241,0.03) !important; }
         .budget-cell-input::placeholder { color: var(--gray-700); }
+        .delete-row-btn {
+          margin-right: 6px;
+          margin-left: -22px;
+          height: 16px;
+          width: 16px;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--red-500);
+          display: flex;
+          align-items: center;
+          font-size: 14px;
+          border: none;
+          cursor: pointer;
+          flex-shrink: 0;
+          overflow: hidden;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          opacity: 0;
+          padding: 0;
+          white-space: nowrap;
+        }
+        tr:hover .delete-row-btn {
+          opacity: 0.5;
+        }
+        .delete-row-btn:hover {
+          width: 58px;
+          background: var(--red-500);
+          color: white;
+          opacity: 1 !important;
+        }
+        .delete-row-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 16px;
+          line-height: 1;
+          margin-bottom: 2px;
+        }
+        .delete-row-text {
+          font-size: 9px;
+          font-weight: 600;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+          text-transform: uppercase;
+        }
+        .delete-row-btn:hover .delete-row-text {
+          opacity: 1;
+        }
       `}</style>
     </div>
   )
