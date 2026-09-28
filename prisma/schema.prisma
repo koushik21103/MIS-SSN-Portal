@@ -74,6 +74,7 @@ model User {
   actuals       Actual[]
   accounts      Account[]
   sessions      Session[]
+  assetRequests AssetEditRequest[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -265,4 +266,16 @@ model AssetMovement {
   isGte180Days    Boolean       // holdingDays >= 180 → affects depreciation rate
   notes           String?
   createdAt       DateTime      @default(now())
+}
+
+model AssetEditRequest {
+  id              String   @id @default(cuid())
+  financialYearId String
+  assetId         String?  // null if it is a new asset creation
+  action          String   // "CREATE", "UPDATE", "DELETE"
+  payload         String   // JSON string of changes
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  requestedById   String
+  requestedBy     User     @relation(fields: [requestedById], references: [id])
+  createdAt       DateTime @default(now())
 }

@@ -39,30 +39,35 @@ export async function GET(req: NextRequest) {
     const rate      = RATE_MAP[b.asset.rateEnum]
     const movements = b.asset.movements
 
-    const additionsGte180 = movements
-      .filter(m => m.type === 'ADDITION' && m.isGte180Days)
-      .reduce((s, m) => s + Number(m.amount), 0)
-    const additionsLt180 = movements
-      .filter(m => m.type === 'ADDITION' && !m.isGte180Days)
-      .reduce((s, m) => s + Number(m.amount), 0)
-    const disposalsLt180 = movements
-      .filter(m => m.type === 'DISPOSAL' && !m.isGte180Days)
-      .reduce((s, m) => s + Number(m.amount), 0)
-    const disposalsGte180 = movements
-      .filter(m => m.type === 'DISPOSAL' && m.isGte180Days)
-      .reduce((s, m) => s + Number(m.amount), 0)
+    let additionsDepr = 0
+    let additionsTotal = 0
+    let disposalsDepr = 0
+    let disposalsTotal = 0
+
+    movements.forEach(m => {
+      const amt = Number(m.amount)
+      const d = new Date(m.date)
+      const monthIdx = d.getMonth()
+      const monthsFromApril = monthIdx >= 3 ? monthIdx - 3 : monthIdx + 9
+      const monthsHeld = monthsFromApril + 1
+      const remainingMonths = 12 - monthsFromApril
+
+      if (m.type === 'ADDITION') {
+        additionsTotal += amt
+        additionsDepr += amt * rate * (remainingMonths / 12)
+      } else if (m.type === 'DISPOSAL') {
+        disposalsTotal += amt
+        disposalsDepr += amt * rate * (monthsHeld / 12)
+      }
+    })
 
     const openingWdv = Number(b.openingWdv)
+    const baseWdv = Math.max(0, openingWdv - disposalsTotal)
+    const baseDepr = baseWdv * rate
 
-    // Excel WDV formula: rate*(opening+addGte) + (addLt*rate/2) - (dispLt*rate) - (dispGte*rate/2)
-    const annualDepr =
-      rate * (openingWdv + additionsGte180) +
-      (additionsLt180 * rate / 2) -
-      (disposalsLt180 * rate) -
-      (disposalsGte180 * rate / 2)
-
+    const annualDepr = baseDepr + additionsDepr + disposalsDepr
     const monthlyDepr = annualDepr / 12
-    const closingWdv  = openingWdv - annualDepr
+    const closingWdv = openingWdv + additionsTotal - disposalsTotal - annualDepr
 
     return {
       assetId:          b.assetId,
@@ -72,10 +77,8 @@ export async function GET(req: NextRequest) {
       ratePct:          rate * 100,
       isActive:         b.asset.isActive,
       openingWdv,
-      additionsGte180,
-      additionsLt180,
-      disposalsLt180,
-      disposalsGte180,
+      additionsTotal,
+      disposalsTotal,
       annualDepr:       Math.max(0, annualDepr),
       monthlyDepr:      Math.max(0, monthlyDepr),
       closingWdv:       Math.max(0, closingWdv),

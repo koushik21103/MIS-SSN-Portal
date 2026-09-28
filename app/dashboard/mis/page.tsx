@@ -244,20 +244,20 @@ export default function MISPage() {
         </div>
         <div className="kpi-card">
           <p className="kpi-label">Net Profit ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
-          <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
-            <div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>BUDGET</p>
               <p className="kpi-value" style={{ color: npBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
                 {formatMoney(npBudget)}
               </p>
             </div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ACTUAL</p>
               <p className="kpi-value" style={{ color: npActual >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
                 {formatMoney(npActual)}
               </p>
             </div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ALLOWED</p>
               <p className="kpi-value" style={{ color: npAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
                 {formatMoney(npAllowed)}
@@ -267,14 +267,14 @@ export default function MISPage() {
         </div>
         <div className="kpi-card">
           <p className="kpi-label">Variance (Net Profit)</p>
-          <div style={{ display: 'flex', gap: 20, marginTop: 4 }}>
-            <div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS BUDGET</p>
               <p className="kpi-value" style={{ color: npVarBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
                 {formatMoney(npVarBudget)}
               </p>
             </div>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS ALLOWED</p>
               <p className="kpi-value" style={{ color: npVarAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
                 {formatMoney(npVarAllowed)}

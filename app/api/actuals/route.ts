@@ -22,7 +22,35 @@ export async function GET(req: NextRequest) {
     orderBy: [{ month: 'asc' }, { accountHead: { sortOrder: 'asc' } }],
   })
 
-  return NextResponse.json(actuals)
+  let prevCloseStock: number | null = null
+  const closeStockHead = await prisma.accountHead.findFirst({ where: { code: 'CLOSE_STOCK' } })
+  
+  if (closeStockHead && month) {
+    const m = parseInt(month)
+    if (m > 1) {
+      const prevActual = await prisma.actual.findFirst({
+        where: { financialYearId: fyId, accountHeadId: closeStockHead.id, month: m - 1 }
+      })
+      if (prevActual) prevCloseStock = Number(prevActual.amount)
+    } else {
+      // m === 1, get prev FY month 12
+      const currentFy = await prisma.financialYear.findUnique({ where: { id: fyId } })
+      if (currentFy) {
+        const prevFy = await prisma.financialYear.findFirst({
+          where: { endDate: { lte: currentFy.startDate } },
+          orderBy: { endDate: 'desc' }
+        })
+        if (prevFy) {
+          const prevActual = await prisma.actual.findFirst({
+            where: { financialYearId: prevFy.id, accountHeadId: closeStockHead.id, month: 12 }
+          })
+          if (prevActual) prevCloseStock = Number(prevActual.amount)
+        }
+      }
+    }
+  }
+
+  return NextResponse.json({ actuals, prevCloseStock })
 }
 
 const actualSchema = z.object({

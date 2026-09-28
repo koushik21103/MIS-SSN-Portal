@@ -114,8 +114,7 @@ export default function DepreciationPage() {
                 <th>Category</th>
                 <th>Rate</th>
                 <th>Opening WDV</th>
-                <th>Additions ≥180d</th>
-                <th>Additions &lt;180d</th>
+                <th>Additions</th>
                 <th>Disposals</th>
                 <th style={{ color: 'var(--red-400)' }}>Annual Depr.</th>
                 <th style={{ color: 'var(--amber-400)' }}>Monthly Depr.</th>
@@ -137,13 +136,8 @@ export default function DepreciationPage() {
                   </td>
                   <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{asset.ratePct}%</td>
                   <td>{fmt(asset.openingWdv, 2)}</td>
-                  <td style={{ color: 'var(--green-400)' }}>{asset.additionsGte180 > 0 ? fmt(asset.additionsGte180, 2) : '—'}</td>
-                  <td style={{ color: 'var(--green-400)' }}>{asset.additionsLt180 > 0 ? fmt(asset.additionsLt180, 2) : '—'}</td>
-                  <td style={{ color: 'var(--red-400)' }}>
-                    {(asset.disposalsLt180 + asset.disposalsGte180) > 0
-                      ? fmt(asset.disposalsLt180 + asset.disposalsGte180, 2)
-                      : '—'}
-                  </td>
+                  <td style={{ color: 'var(--green-400)' }}>{asset.additionsTotal > 0 ? fmt(asset.additionsTotal, 2) : '—'}</td>
+                  <td style={{ color: 'var(--red-400)' }}>{asset.disposalsTotal > 0 ? fmt(asset.disposalsTotal, 2) : '—'}</td>
                   <td style={{ color: 'var(--red-400)', fontWeight: 500 }}>{fmt(asset.annualDepr, 2)}</td>
                   <td style={{ color: 'var(--amber-400)', fontWeight: 500 }}>{fmt(asset.monthlyDepr, 2)}</td>
                   <td style={{ color: 'var(--green-400)', fontWeight: 600 }}>{fmt(asset.closingWdv, 2)}</td>
@@ -155,9 +149,8 @@ export default function DepreciationPage() {
                 <tr className="row-total">
                   <td colSpan={3} style={{ textAlign: 'left' }}>Total ({filtered.length} assets)</td>
                   <td>{fmt(filtered.reduce((s, a) => s + a.openingWdv, 0), 0)}</td>
-                  <td>{fmt(filtered.reduce((s, a) => s + a.additionsGte180, 0), 0)}</td>
-                  <td>{fmt(filtered.reduce((s, a) => s + a.additionsLt180, 0), 0)}</td>
-                  <td>{fmt(filtered.reduce((s, a) => s + a.disposalsLt180 + a.disposalsGte180, 0), 0)}</td>
+                  <td>{fmt(filtered.reduce((s, a) => s + a.additionsTotal, 0), 0)}</td>
+                  <td>{fmt(filtered.reduce((s, a) => s + a.disposalsTotal, 0), 0)}</td>
                   <td style={{ color: 'var(--red-400)' }}>{fmt(filtered.reduce((s, a) => s + a.annualDepr, 0), 0)}</td>
                   <td style={{ color: 'var(--amber-400)' }}>{fmt(filtered.reduce((s, a) => s + a.monthlyDepr, 0), 2)}</td>
                   <td style={{ color: 'var(--green-400)' }}>{fmt(filtered.reduce((s, a) => s + a.closingWdv, 0), 0)}</td>

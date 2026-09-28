@@ -27,6 +27,7 @@ export default function ActualsPage() {
   const [currentPeriod, setCurrentPeriod] = useState<any>(null)
   const [allPeriods, setAllPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [prevCloseStock, setPrevCloseStock] = useState<number | null>(null)
 
   // Load heads once
   useEffect(() => {
@@ -56,15 +57,27 @@ export default function ActualsPage() {
         fetch(`/api/actuals?fyId=${fyId}&month=${month}`),
         fetch(`/api/periods?fyId=${fyId}`),
       ])
-      const actualsData = await actualsRes.json()
+      const actualsDataJson = await actualsRes.json()
       const periodsData = await periodsRes.json()
+
+      const aData = actualsDataJson.actuals || []
+      const pStock = actualsDataJson.prevCloseStock ?? null
 
       const map: Record<string, number> = {}
       const notes: Record<string, string> = {}
-      for (const a of actualsData) {
+      for (const a of aData) {
         map[a.accountHeadId] = Number(a.amount)
         if (a.notes) notes[a.accountHeadId] = a.notes
       }
+
+      setPrevCloseStock(pStock)
+
+      // Automatically override OPEN_STOCK if we have prevCloseStock
+      const openStockHead = heads.find(h => h.code === 'OPEN_STOCK')
+      if (openStockHead && pStock !== null) {
+        map[openStockHead.id] = pStock
+      }
+
       setActualMap(map)
       setNoteMap(notes)
 
@@ -80,7 +93,8 @@ export default function ActualsPage() {
   }, [fyId, month])
 
   function handleChange(headId: string, raw: string) {
-    const val = parseFloat(raw.replace(/,/g, '')) || 0
+    let val = parseFloat(raw.replace(/,/g, '')) || 0
+    val = Math.round(val)
     setActualMap(prev => ({ ...prev, [headId]: val }))
     setDirty(prev => ({ ...prev, [headId]: true }))
     setSaved(prev => ({ ...prev, [headId]: false }))
@@ -95,34 +109,48 @@ export default function ActualsPage() {
   const dirtyRef = useRef(dirty)
   useEffect(() => { dirtyRef.current = dirty }, [dirty])
 
-  const saveRow = useCallback((headId: string) => {
+  const [isClosing, setIsClosing] = useState(false)
+
+  async function handleCloseMonth() {
+    if (!confirm(`Are you sure you want to close Month ${month}? This unlocks the next month for entry.`)) return
     if (!fyId || periodStatus === 'LOCKED') return
-    setTimeout(async () => {
-      if (!dirtyRef.current[headId]) return
-      setSaving(prev => ({ ...prev, [headId]: true }))
-      const res = await fetch('/api/actuals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    setIsClosing(true)
+
+    const dirtyKeys = Object.keys(dirtyRef.current).filter(k => dirtyRef.current[k])
+    
+    // Check if there's at least one entry
+    const hasAnyEntry = Object.values(actualMapRef.current).some(v => v !== 0)
+    if (!hasAnyEntry && dirtyKeys.length === 0) {
+      alert("Cannot submit month without any actual entries.")
+      setIsClosing(false)
+      return
+    }
+
+    try {
+      if (dirtyKeys.length > 0) {
+        const payload = dirtyKeys.map(headId => ({
           financialYearId: fyId,
           accountHeadId: headId,
           month,
           amount: actualMapRef.current[headId] ?? 0,
-          notes: noteMapRef.current[headId],
-        }),
-      })
-      setSaving(prev => ({ ...prev, [headId]: false }))
-      if (res.ok) {
-        setDirty(prev => ({ ...prev, [headId]: false }))
-        setSaved(prev => ({ ...prev, [headId]: true }))
-        setTimeout(() => setSaved(prev => ({ ...prev, [headId]: false })), 2000)
+          notes: noteMapRef.current[headId]
+        }))
+        const batchRes = await fetch('/api/actuals/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (!batchRes.ok) {
+          const data = await batchRes.json()
+          alert(data.error || 'Failed to save data before closing.')
+          setIsClosing(false)
+          return
+        }
+        setDirty({})
+        setSaved(dirtyKeys.reduce((acc, k) => ({...acc, [k]: true}), {}))
+        setTimeout(() => setSaved({}), 2000)
       }
-    }, 150)
-  }, [fyId, month, periodStatus])
 
-  async function handleCloseMonth() {
-    if (!confirm(`Are you sure you want to close Month ${month}? This unlocks the next month for entry.`)) return
-    try {
       const res = await fetch('/api/periods/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,6 +167,8 @@ export default function ActualsPage() {
       }
     } catch (e) {
       console.error(e)
+    } finally {
+      setIsClosing(false)
     }
   }
 
@@ -186,15 +216,15 @@ export default function ActualsPage() {
               )
             })}
           </select>
-          {/* Close Month Button */}
-          {(!currentPeriod?.submittedAt || periodStatus === 'OPEN' || periodStatus === 'PENDING_REVIEW') && !isLocked && Object.keys(actualMap).length > 0 && (
+          {/* Action Buttons */}
+          {(!currentPeriod?.submittedAt || periodStatus === 'OPEN' || periodStatus === 'PENDING_REVIEW') && !isLocked && (
             <button 
               onClick={handleCloseMonth}
-              disabled={!!currentPeriod?.submittedAt}
+              disabled={isClosing || (!!currentPeriod?.submittedAt && !Object.values(dirty).some(v => v))}
               className="btn btn-primary"
               style={{ padding: '6px 14px', fontSize: 13 }}
             >
-              {currentPeriod?.submittedAt ? 'Submitted' : 'Close Month'}
+              {isClosing ? 'Closing...' : (Object.values(dirty).some(v => v) ? 'Submit Updates' : (currentPeriod?.submittedAt ? 'Submitted' : 'Close Month'))}
             </button>
           )}
         </div>
@@ -263,15 +293,14 @@ export default function ActualsPage() {
                         <input
                           type="text"
                           id={`actual-${head.code}`}
-                          disabled={isLocked}
-                          defaultValue={val !== 0 ? val.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''}
+                          disabled={isLocked || (head.code === 'OPEN_STOCK' && prevCloseStock !== null)}
+                          defaultValue={val !== 0 ? Math.round(val).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : ''}
                           onFocus={e => e.target.select()}
                           onChange={e => handleChange(head.id, e.target.value)}
-                          onBlur={() => saveRow(head.id)}
                           placeholder="—"
                           aria-label={`${head.name} actual amount`}
                           className="input"
-                          style={{ maxWidth: 170, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: isLocked ? 0.5 : 1 }}
+                          style={{ maxWidth: 170, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: (isLocked || (head.code === 'OPEN_STOCK' && prevCloseStock !== null)) ? 0.5 : 1 }}
                         />
                       </td>
                       <td style={{ padding: '3px 6px' }}>
@@ -284,7 +313,6 @@ export default function ActualsPage() {
                             setNoteMap(prev => ({ ...prev, [head.id]: e.target.value }))
                             setDirty(prev => ({ ...prev, [head.id]: true }))
                           }}
-                          onBlur={() => saveRow(head.id)}
                           placeholder="Optional note…"
                           className="input"
                           style={{ opacity: isLocked ? 0.5 : 1 }}
@@ -318,7 +346,7 @@ export default function ActualsPage() {
                     <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
                       <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
                       <td style={{ textAlign: 'right', padding: '6px 20px', color: highlight, fontVariantNumeric: 'tabular-nums' }}>
-                        {computed !== 0 ? computed.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
+                        {computed !== 0 ? Math.round(computed).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}
                       </td>
                       <td></td>
                       <td></td>

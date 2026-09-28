@@ -21,7 +21,7 @@ type Budget = {
 
 function fmt(n: number) {
   if (n === 0) return ''
-  return n.toLocaleString('en-IN')
+  return Math.round(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -30,12 +30,12 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 const BudgetCell = ({ value, onChange, onBlur, className, style, onFocusCapture, onBlurCapture }: any) => {
-  const [localVal, setLocalVal] = useState(value ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+  const [localVal, setLocalVal] = useState(value ? Math.round(value).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '')
 
   useEffect(() => {
     const parsedLocal = parseFloat(localVal.replace(/,/g, '')) || 0
-    if (Math.abs(parsedLocal - (value || 0)) > 0.001) {
-      setLocalVal(value ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+    if (Math.abs(parsedLocal - (value || 0)) > 0.5) {
+      setLocalVal(value ? Math.round(value).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '')
     }
   }, [value])
 
@@ -49,8 +49,9 @@ const BudgetCell = ({ value, onChange, onBlur, className, style, onFocusCapture,
         onChange(e.target.value)
       }}
       onBlur={e => {
-        const p = parseFloat(e.target.value.replace(/,/g, '')) || 0
-        setLocalVal(p ? p.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '')
+        let p = parseFloat(e.target.value.replace(/,/g, '')) || 0
+        p = Math.round(p)
+        setLocalVal(p ? p.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '')
         if (onBlur) onBlur()
       }}
       onFocus={e => e.target.select()}
@@ -432,11 +433,11 @@ export default function BudgetPage() {
                 return (
                   <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
                     <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
-                    <td style={{ textAlign: 'right', padding: '6px 8px', color: highlight, fontVariantNumeric: 'tabular-nums' }}>{annual !== 0 ? annual.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '6px 8px', color: highlight, fontVariantNumeric: 'tabular-nums' }}>{annual !== 0 ? Math.round(annual).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}</td>
                     <td style={{ textAlign: 'right', padding: '6px 8px', color: subtext, fontVariantNumeric: 'tabular-nums' }}>{pct !== 0 ? pct.toFixed(1) + '%' : '—'}</td>
                     {Array.from({length: 12}).map((_, i) => (
                       <td key={i} style={{ textAlign: 'right', padding: '6px 8px', color: color, fontVariantNumeric: 'tabular-nums', fontSize: '12px' }}>
-                        {computed[`m${i+1}`] !== 0 ? computed[`m${i+1}`].toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}
+                        {computed[`m${i+1}`] !== 0 ? Math.round(computed[`m${i+1}`]).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}
                       </td>
                     ))}
                     <td style={{ textAlign: 'right', padding: '6px 8px', color: Math.abs(check) > 0.01 ? (level==='primary'?'#ffb3b3':'var(--red-400)') : subtext, fontVariantNumeric: 'tabular-nums', fontSize: '12px' }}>
