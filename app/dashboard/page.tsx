@@ -149,9 +149,15 @@ export default async function DashboardPage() {
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" /></svg>
               View MIS P&amp;L
             </a>
+            {(role === 'ADMIN' || role === 'FINANCE' || role === 'CFO') && (
+              <a href="/dashboard/assets" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" /><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+                Manage Assets (Add / Modify / Move)
+              </a>
+            )}
             <a href="/dashboard/depreciation" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" /></svg>
-              Asset Register
+              Depreciation Register
             </a>
           </div>
         </div>

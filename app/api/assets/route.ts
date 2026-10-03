@@ -22,10 +22,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(assets)
 }
 
-// POST /api/assets — Admin only, create a new asset and its year balance
+// POST /api/assets — Admin, Finance, CFO: create a new asset and its year balance
 export async function POST(req: Request) {
   const session = await auth()
-  if (!session || session.user.role !== 'ADMIN') {
+  if (!session || !['ADMIN', 'FINANCE', 'CFO'].includes(session.user.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -54,10 +54,10 @@ export async function POST(req: Request) {
   return NextResponse.json(asset, { status: 201 })
 }
 
-// PATCH /api/assets — Admin only, update asset name/category/isActive or record a movement
+// PATCH /api/assets — Admin, Finance, CFO: update asset or record a movement
 export async function PATCH(req: Request) {
   const session = await auth()
-  if (!session || session.user.role !== 'ADMIN') {
+  if (!session || !['ADMIN', 'FINANCE', 'CFO'].includes(session.user.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
@@ -99,17 +99,27 @@ export async function PATCH(req: Request) {
   }
 
   // Asset field update
-  const { id, name, category, isActive } = body
+  const { id, name, category, isActive, rateEnum, purchaseDate, openingWdv, financialYearId } = body
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
 
   const updated = await prisma.asset.update({
     where: { id },
     data: {
-      ...(name     !== undefined && { name }),
-      ...(category !== undefined && { category }),
-      ...(isActive !== undefined && { isActive }),
+      ...(name         !== undefined && { name }),
+      ...(category     !== undefined && { category }),
+      ...(rateEnum     !== undefined && { rateEnum }),
+      ...(purchaseDate !== undefined && { purchaseDate: new Date(purchaseDate) }),
+      ...(isActive     !== undefined && { isActive }),
     },
   })
+
+  if (openingWdv !== undefined && financialYearId) {
+    await prisma.assetYearBalance.upsert({
+      where: { assetId_financialYearId: { assetId: id, financialYearId } },
+      update: { openingWdv: parseFloat(openingWdv) },
+      create: { assetId: id, financialYearId, openingWdv: parseFloat(openingWdv) },
+    })
+  }
 
   return NextResponse.json(updated)
 }

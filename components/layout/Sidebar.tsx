@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useState, useEffect } from 'react'
 import type { Role } from '@prisma/client'
 
 type NavItem = {
@@ -92,7 +93,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     href:  '/dashboard/assets',
     label: 'Assets',
-    roles: ['ADMIN'],
+    roles: ['ADMIN', 'FINANCE', 'CFO'],
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
         <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
@@ -125,7 +126,6 @@ const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-
 const ROLE_LABELS: Record<Role, string> = {
   ADMIN:   'Administrator',
   FINANCE: 'Finance',
@@ -133,16 +133,61 @@ const ROLE_LABELS: Record<Role, string> = {
   VIEWER:  'Viewer',
 }
 
+const COLLAPSED_WIDTH = '60px'
+const EXPANDED_WIDTH = '240px'
+
 export default function Sidebar({ role }: { role: Role }) {
   const pathname = usePathname()
+  const [collapsed, setCollapsed] = useState(false)
+
+  // Persist collapse state in localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem('sidebar-collapsed')
+    if (stored === 'true') setCollapsed(true)
+  }, [])
+
+  const toggle = () => {
+    setCollapsed(c => {
+      localStorage.setItem('sidebar-collapsed', String(!c))
+      return !c
+    })
+  }
+
+  // Notify main content to shift
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--sidebar-width',
+      collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH
+    )
+  }, [collapsed])
 
   const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role))
 
   return (
-    <aside className="sidebar" id="main-sidebar">
-      {/* Brand */}
-      <div className="sidebar-brand">
-        <div className="sidebar-logo">
+    <aside
+      className="sidebar"
+      id="main-sidebar"
+      style={{ width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH, transition: 'width 0.22s cubic-bezier(0.4,0,0.2,1)' }}
+    >
+      {/* Brand + toggle */}
+      <div
+        className="sidebar-brand"
+        style={{
+          padding: collapsed ? '14px 0 10px' : '20px 16px 18px',
+          flexDirection: collapsed ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          gap: collapsed ? 6 : 10,
+          overflow: 'hidden',
+          width: '100%',
+        }}
+      >
+        <div
+          className="sidebar-logo"
+          style={{ flexShrink: 0, cursor: collapsed ? 'pointer' : 'default', display: 'flex', justifyContent: 'center' }}
+          onClick={collapsed ? toggle : undefined}
+          title={collapsed ? 'Click to expand sidebar' : undefined}
+        >
           <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="32">
             <rect width="40" height="40" rx="10" fill="url(#sbgrad)"/>
             <path d="M10 28V14l10 7 10-7v14" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -153,14 +198,56 @@ export default function Sidebar({ role }: { role: Role }) {
             </defs>
           </svg>
         </div>
-        <div>
-          <span className="sidebar-brand-name">MIS Portal</span>
-          <span className="sidebar-fy">FY 2026–2027</span>
-        </div>
+        {!collapsed && (
+          <div style={{ overflow: 'hidden', flex: 1 }}>
+            <span className="sidebar-brand-name">MIS Portal</span>
+            <span className="sidebar-fy">FY 2026–2027</span>
+          </div>
+        )}
+        {/* Collapse toggle button */}
+        <button
+          id="sidebar-toggle"
+          onClick={toggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          style={{
+            flexShrink: 0,
+            marginLeft: collapsed ? 0 : 'auto',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--text-muted)',
+            padding: 4,
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'color 0.15s, background 0.15s',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.color = 'var(--text-primary)'
+            e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.color = 'var(--text-muted)'
+            e.currentTarget.style.background = 'transparent'
+          }}
+        >
+          {collapsed ? (
+            // Chevron right (expand)
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          ) : (
+            // Chevron left (collapse)
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          )}
+        </button>
       </div>
 
       {/* Nav */}
-      <nav className="sidebar-nav" aria-label="Main navigation">
+      <nav className="sidebar-nav" aria-label="Main navigation" style={{ padding: collapsed ? '12px 4px' : '12px 8px' }}>
         {visibleItems.map(item => {
           const isActive = item.href === '/dashboard'
             ? pathname === '/dashboard'
@@ -172,20 +259,33 @@ export default function Sidebar({ role }: { role: Role }) {
               id={`nav-${item.label.toLowerCase().replace(/[^a-z]/g, '-')}`}
               className={`sidebar-link ${isActive ? 'sidebar-link-active' : ''}`}
               aria-current={isActive ? 'page' : undefined}
+              title={collapsed ? item.label : undefined}
+              style={{
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                padding: collapsed ? '9px 0' : '9px 12px',
+              }}
             >
               <span className="sidebar-link-icon">{item.icon}</span>
-              <span className="sidebar-link-label">{item.label}</span>
-              {item.badge && <span className="sidebar-badge">{item.badge}</span>}
+              {!collapsed && (
+                <span className="sidebar-link-label">{item.label}</span>
+              )}
+              {!collapsed && item.badge && <span className="sidebar-badge">{item.badge}</span>}
             </Link>
           )
         })}
       </nav>
 
       {/* Role badge at bottom */}
-      <div className="sidebar-footer">
-        <span className={`role-badge role-${role.toLowerCase()}`}>
-          {ROLE_LABELS[role]}
-        </span>
+      <div className="sidebar-footer" style={{ padding: collapsed ? '12px 0' : '16px', display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+        {collapsed ? (
+          <div title={ROLE_LABELS[role]} style={{ textAlign: 'center', fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.04em', fontWeight: 600 }}>
+            {role.slice(0, 2)}
+          </div>
+        ) : (
+          <span className={`role-badge role-${role.toLowerCase()}`}>
+            {ROLE_LABELS[role]}
+          </span>
+        )}
       </div>
     </aside>
   )

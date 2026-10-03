@@ -20,42 +20,24 @@ export const RATE_MAP: Record<DepRate, number> = {
   FORTY:   0.40,
 }
 
-// ── Core WDV Formula ───────────────────────────────────────────────────────────
+// ── Broken-Period Monthly Pro-Rata Formula ──────────────────────────────────────
 /**
- * Compute annual depreciation for a single asset for a given financial year.
- * Exactly mirrors the Excel formula in column I of the Depreciation sheet.
+ * Compute depreciation for additions and disposals based on the month added or disposed:
+ * - Addition: remaining period of FY / 12 months (e.g., added in Oct = 6/12)
+ * - Disposal/Sale: period up to sale / 12 months of that FY (e.g., disposed in Oct = 7/12)
  */
-export function computeAnnualDepreciation(params: {
-  rate:            number  // 0.15 or 0.40
-  openingWdv:      number  // AssetYearBalance.openingWdv
-  additionsGte180: number  // sum of ADDITION movements where isGte180Days = true
-  additionsLt180:  number  // sum of ADDITION movements where isGte180Days = false
-  disposalsLt180:  number  // sum of DISPOSAL movements where isGte180Days = false
-  disposalsGte180: number  // sum of DISPOSAL movements where isGte180Days = true
-}): number {
-  const { rate, openingWdv, additionsGte180, additionsLt180,
-          disposalsLt180, disposalsGte180 } = params
-
-  return (
-    rate * (openingWdv + additionsGte180)
-    + (additionsLt180  * rate / 2)   // half rate: purchased late in year
-    - (disposalsLt180  * rate)        // full rate subtracted: disposed early
-    - (disposalsGte180 * rate / 2)    // half rate subtracted: disposed late
-  )
+export function getBrokenPeriodMonths(date: Date): { monthsHeld: number; remainingMonths: number } {
+  const monthIdx = date.getMonth() // 0 = Jan, 3 = Apr, 9 = Oct
+  const monthsFromApril = monthIdx >= 3 ? monthIdx - 3 : monthIdx + 9
+  const monthsHeld = monthsFromApril + 1 // Apr through addition/disposal month
+  const remainingMonths = 12 - monthsFromApril // addition month through Mar
+  return { monthsHeld, remainingMonths }
 }
 
 export function computeMonthlyDepreciation(annual: number): number {
   return annual / 12
 }
 
-// ── Holding Days Calculation ───────────────────────────────────────────────────
-/**
- * Compute how many days an asset movement (addition/disposal) date
- * falls before the financial year end (March 31).
- *
- * Used to classify movement as <180 days or ≥180 days,
- * which determines the depreciation rate applied.
- */
 export function computeHoldingDays(movementDate: Date, fyEndDate: Date): number {
   const msPerDay = 1000 * 60 * 60 * 24
   const days = Math.floor((fyEndDate.getTime() - movementDate.getTime()) / msPerDay)
@@ -69,12 +51,12 @@ export function isGte180Days(movementDate: Date, fyEndDate: Date): boolean {
 // ── Per-Asset Depreciation Calculator ─────────────────────────────────────────
 /**
  * Calculate annual and monthly depreciation for one asset in one financial year,
- * reading its balance and movements from the database.
+ * reading its balance and movements from the database with broken period calculation.
  */
 export async function calculateAssetDepreciation(
   assetId:         string,
   financialYearId: string,
-  fyEndDate:       Date,
+  _fyEndDate:      Date,
   prisma:          PrismaClient,
 ): Promise<{ annualDepr: number; monthlyDepr: number; closingWdv: number } | null> {
   const balance = await prisma.assetYearBalance.findUnique({
@@ -92,33 +74,30 @@ export async function calculateAssetDepreciation(
 
   const rate = RATE_MAP[balance.asset.rateEnum]
 
-  const additionsGte180 = movements
-    .filter(m => m.type === 'ADDITION' && m.isGte180Days)
-    .reduce((sum, m) => sum + Number(m.amount), 0)
+  let additionsDepr = 0
+  let additionsTotal = 0
+  let disposalsDepr = 0
+  let disposalsTotal = 0
 
-  const additionsLt180 = movements
-    .filter(m => m.type === 'ADDITION' && !m.isGte180Days)
-    .reduce((sum, m) => sum + Number(m.amount), 0)
+  movements.forEach(m => {
+    const amt = Number(m.amount)
+    const { monthsHeld, remainingMonths } = getBrokenPeriodMonths(new Date(m.date))
 
-  const disposalsLt180 = movements
-    .filter(m => m.type === 'DISPOSAL' && !m.isGte180Days)
-    .reduce((sum, m) => sum + Number(m.amount), 0)
-
-  const disposalsGte180 = movements
-    .filter(m => m.type === 'DISPOSAL' && m.isGte180Days)
-    .reduce((sum, m) => sum + Number(m.amount), 0)
-
-  const annualDepr = computeAnnualDepreciation({
-    rate,
-    openingWdv:      Number(balance.openingWdv),
-    additionsGte180,
-    additionsLt180,
-    disposalsLt180,
-    disposalsGte180,
+    if (m.type === 'ADDITION') {
+      additionsTotal += amt
+      additionsDepr += amt * rate * (remainingMonths / 12)
+    } else if (m.type === 'DISPOSAL') {
+      disposalsTotal += amt
+      disposalsDepr += amt * rate * (monthsHeld / 12)
+    }
   })
 
-  const monthlyDepr = computeMonthlyDepreciation(annualDepr)
-  const closingWdv  = Number(balance.openingWdv) - annualDepr
+  const openingWdv = Number(balance.openingWdv)
+  const baseWdv = Math.max(0, openingWdv - disposalsTotal)
+  const baseDepr = baseWdv * rate
+  const annualDepr = Math.max(0, baseDepr + additionsDepr + disposalsDepr)
+  const monthlyDepr = annualDepr / 12
+  const closingWdv = Math.max(0, openingWdv + additionsTotal - disposalsTotal - annualDepr)
 
   return { annualDepr, monthlyDepr, closingWdv }
 }

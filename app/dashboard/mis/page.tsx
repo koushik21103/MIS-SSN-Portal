@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { PLBarChart } from '@/components/charts/PLCharts'
+import { PLBarChart, MonthlyComparisonChart, type MonthlyHeadDataPoint } from '@/components/charts/PLCharts'
 import { useFY } from '@/components/FYProvider'
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
@@ -55,6 +55,12 @@ export default function MISPage() {
   const [rows, setRows] = useState<PLRow[]>([])
   const [loading, setLoading] = useState(true)
 
+  // 12-month head comparison chart
+  const [selectedHead, setSelectedHead] = useState<{ id: string; name: string; code: string } | null>(null)
+  const [monthlyHeadData, setMonthlyHeadData] = useState<MonthlyHeadDataPoint[]>([])
+  const [monthlyHeadLoading, setMonthlyHeadLoading] = useState(false)
+  const [showMonthlyHeadChart, setShowMonthlyHeadChart] = useState(true)
+
   useEffect(() => {
     async function load() {
       if (!fyId) return
@@ -77,6 +83,18 @@ export default function MISPage() {
     }
     load()
   }, [fyId, month, segment])
+
+  useEffect(() => {
+    if (!fyId || !selectedHead) return
+    setMonthlyHeadLoading(true)
+    fetch(`/api/mis/head-monthly?fyId=${fyId}&headId=${selectedHead.id}`)
+      .then(res => res.json())
+      .then(data => {
+        setMonthlyHeadData(data.months || [])
+        setMonthlyHeadLoading(false)
+      })
+      .catch(() => setMonthlyHeadLoading(false))
+  }, [fyId, selectedHead])
 
   // Group rows by type, keep parent rows and child rows separate
   const rowMap = Object.fromEntries(rows.map(r => [r.code, r]))
@@ -209,23 +227,25 @@ export default function MISPage() {
 
       {/* Chart panel */}
       {showChart && !loading && (() => {
-        const SKIP = ['GROSS_PROFIT', 'NET_PROFIT', 'SALES_TOTAL', 'COGS_TOTAL', 'DIREXP_TOTAL', 'INDINC_TOTAL', 'INDEXP_TOTAL']
-        const chartRows = rows.filter(r => !SKIP.includes(r.code) && r.parentId !== null).slice(0, 12)
+        const SKIP = ['GROSS_PROFIT', 'NET_PROFIT', 'SALES_TOTAL', 'COGS_TOTAL', 'DIREXP_TOTAL', 'INDINC_TOTAL', 'INDEXP_TOTAL', 'PURCH_TOTAL']
+        const chartRows = rows.filter(r => !SKIP.includes(r.code) && r.parentId !== null)
         const chartData = chartRows.map(r => ({
-          month: r.name.length > 14 ? r.name.slice(0, 13) + '…' : r.name,
+          name: r.name,
           budget: view === 'monthly' ? r.budget : r.budgetYTD,
           actual: view === 'monthly' ? r.actual : r.actualYTD,
           allowed: view === 'monthly' ? r.allowed : r.allowedYTD,
+          type: r.type,
         }))
         return (
           <div className="card" style={{ marginBottom: 20 }}>
-            <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
+            <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
               Budget vs Actual vs Allowed — {view === 'monthly' ? MONTHS[month - 1] : `YTD Apr–${MONTHS[month - 1]}`}
             </p>
-            <PLBarChart data={chartData} height={300} />
+            <PLBarChart data={chartData} height={300} viewLabel={`${view === 'monthly' ? MONTHS[month - 1] : 'YTD'}`} />
           </div>
         )
       })()}
+
 
       {/* Revenue KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
@@ -244,45 +264,88 @@ export default function MISPage() {
         </div>
         <div className="kpi-card">
           <p className="kpi-label">Net Profit ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>BUDGET</p>
-              <p className="kpi-value" style={{ color: npBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                {formatMoney(npBudget)}
-              </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>BUDGET</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npBudget)}</span>
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ACTUAL</p>
-              <p className="kpi-value" style={{ color: npActual >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                {formatMoney(npActual)}
-              </p>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ACTUAL</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npActual >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npActual)}</span>
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>ALLOWED</p>
-              <p className="kpi-value" style={{ color: npAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                {formatMoney(npAllowed)}
-              </p>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ALLOWED</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npAllowed)}</span>
             </div>
           </div>
         </div>
         <div className="kpi-card">
           <p className="kpi-label">Variance (Net Profit)</p>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS BUDGET</p>
-              <p className="kpi-value" style={{ color: npVarBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                {formatMoney(npVarBudget)}
-              </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>VS BUDGET</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npVarBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npVarBudget)}</span>
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>VS ALLOWED</p>
-              <p className="kpi-value" style={{ color: npVarAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                {formatMoney(npVarAllowed)}
-              </p>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>VS ALLOWED</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npVarAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npVarAllowed)}</span>
             </div>
           </div>
         </div>
       </div>
+
+      {/* 12-Month Head Comparison Chart */}
+      {selectedHead && (
+        <div className="card" style={{ marginBottom: 20, border: '1px solid rgba(99,102,241,0.3)', background: 'var(--surface-1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showMonthlyHeadChart ? 16 : 0, flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--indigo-400)' }} />
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+                12-Month Monthly Comparison: <span style={{ color: 'var(--indigo-400)' }}>{selectedHead.name}</span>
+              </h3>
+              {/* Account head quick selector */}
+              <select
+                className="select"
+                style={{ fontSize: 12, padding: '4px 8px', height: 28, minWidth: 220 }}
+                value={selectedHead.id}
+                onChange={e => {
+                  const h = rows.find(r => r.accountHeadId === e.target.value)
+                  if (h) setSelectedHead({ id: h.accountHeadId, name: h.name, code: h.code })
+                }}
+              >
+                {rows.filter(r => r.parentId !== null).map(r => (
+                  <option key={r.accountHeadId} value={r.accountHeadId}>{r.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 11, padding: '4px 10px' }}
+                onClick={() => setShowMonthlyHeadChart(v => !v)}
+              >
+                {showMonthlyHeadChart ? 'Collapse Chart' : 'Expand Chart'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: 14, padding: '2px 8px', color: 'var(--text-muted)' }}
+                onClick={() => setSelectedHead(null)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {showMonthlyHeadChart && (
+            monthlyHeadLoading ? (
+              <div className="skeleton" style={{ height: 260 }} />
+            ) : (
+              <MonthlyComparisonChart data={monthlyHeadData} headName={selectedHead.name} height={280} />
+            )
+          )}
+        </div>
+      )}
 
       {/* P&L Table */}
       {loading ? (
@@ -308,9 +371,31 @@ export default function MISPage() {
                 const renderRow = (code: string) => {
                   const row = getRow(code)
                   if (!row) return null
+                  const isSelected = selectedHead?.id === row.accountHeadId
                   return (
-                    <tr key={row.accountHeadId}>
-                      <td style={{ paddingLeft: 28, fontSize: '12.5px', color: 'var(--text-secondary)', position: 'sticky', left: 0, background: 'var(--surface-2)' }}>
+                    <tr
+                      key={row.accountHeadId}
+                      onClick={() => {
+                        setSelectedHead({ id: row.accountHeadId, name: row.name, code: row.code })
+                        setShowMonthlyHeadChart(true)
+                      }}
+                      style={{
+                        cursor: 'pointer',
+                        background: isSelected ? 'rgba(99,102,241,0.08)' : undefined,
+                        transition: 'background 0.15s',
+                      }}
+                      title="Click to view 12-month comparison chart"
+                    >
+                      <td style={{
+                        paddingLeft: 28,
+                        fontSize: '12.5px',
+                        color: isSelected ? 'var(--indigo-300)' : 'var(--text-secondary)',
+                        position: 'sticky',
+                        left: 0,
+                        background: isSelected ? 'rgba(99,102,241,0.18)' : 'var(--surface-2)',
+                        fontWeight: isSelected ? 600 : 400,
+                      }}>
+                        <span style={{ marginRight: 6, fontSize: 11, opacity: isSelected ? 1 : 0.4 }}>📊</span>
                         {row.name}
                       </td>
                       <td>{fmtCr(b(row))}</td>

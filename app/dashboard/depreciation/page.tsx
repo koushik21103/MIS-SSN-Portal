@@ -2,18 +2,19 @@
 
 import { useState, useEffect } from 'react'
 import { useFY } from '@/components/FYProvider'
+import { AssetPieChart } from '@/components/charts/PLCharts'
 
 type AssetRow = {
   assetId: string; assetName: string; category: string; rateEnum: string; ratePct: number; isActive: boolean
-  openingWdv: number; additionsGte180: number; additionsLt180: number
-  disposalsLt180: number; disposalsGte180: number
+  openingWdv: number; additionsTotal: number; disposalsTotal: number
   annualDepr: number; monthlyDepr: number; closingWdv: number
+  purchaseDate: string; assetAddedThisFY: boolean
 }
 type Totals = { totalOpeningWdv: number; totalAnnualDepr: number; totalMonthlyDepr: number; totalClosingWdv: number }
 
-function fmt(n: number, dec = 0) {
+function fmt(n: number, _dec = 0) {
   if (n === 0) return '—'
-  return n.toLocaleString('en-IN', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+  return Math.round(n).toLocaleString('en-IN')
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -28,6 +29,7 @@ export default function DepreciationPage() {
   const [loading, setLoading] = useState(true)
   const [filterCat, setFilterCat] = useState('All')
   const [search, setSearch]   = useState('')
+  const [showPieChart, setShowPieChart] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -57,7 +59,7 @@ export default function DepreciationPage() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h1 className="page-title">Asset Register &amp; Depreciation</h1>
-          <p className="page-subtitle">FY {fyLabel} · WDV method — 15% (Plant/Machinery) / 40% (Computers)</p>
+          <p className="page-subtitle">FY {fyLabel} · WDV method — 15% (Plant/Machinery) / 40% (Computers) · Broken period monthly pro-rata</p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <input id="depr-search" type="search" placeholder="Search assets…" className="input" value={search}
@@ -90,6 +92,40 @@ export default function DepreciationPage() {
           </div>
         </div>
       )}
+
+      {/* Asset category pie chart */}
+      {!loading && schedule.length > 0 && (() => {
+        // Aggregate by category
+        const catMap: Record<string, { count: number; wdv: number; rate: string }> = {}
+        for (const a of schedule.filter(x => x.isActive)) {
+          if (!catMap[a.category]) catMap[a.category] = { count: 0, wdv: 0, rate: a.rateEnum }
+          catMap[a.category].count++
+          catMap[a.category].wdv += a.openingWdv
+        }
+        const pieData = Object.entries(catMap).map(([category, v]) => ({ category, ...v }))
+          .sort((a, b) => b.wdv - a.wdv)
+        return (
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showPieChart ? 16 : 0 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Asset Mix by Category — Opening WDV Breakdown
+              </p>
+              <button
+                onClick={() => setShowPieChart(prev => !prev)}
+                className="btn btn-secondary"
+                style={{ fontSize: 11, padding: '4px 8px' }}
+              >
+                {showPieChart ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            {showPieChart && (
+              <div style={{ transition: 'all 0.3s ease' }}>
+                <AssetPieChart data={pieData} />
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Category filter pills */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -138,7 +174,15 @@ export default function DepreciationPage() {
                   <td>{fmt(asset.openingWdv, 2)}</td>
                   <td style={{ color: 'var(--green-400)' }}>{asset.additionsTotal > 0 ? fmt(asset.additionsTotal, 2) : '—'}</td>
                   <td style={{ color: 'var(--red-400)' }}>{asset.disposalsTotal > 0 ? fmt(asset.disposalsTotal, 2) : '—'}</td>
-                  <td style={{ color: 'var(--red-400)', fontWeight: 500 }}>{fmt(asset.annualDepr, 2)}</td>
+                  <td style={{ color: 'var(--red-400)', fontWeight: 500 }}>
+                    {fmt(asset.annualDepr, 2)}
+                    {asset.assetAddedThisFY && (
+                      <span title={`Pro-rata from ${new Date(asset.purchaseDate).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}`}
+                        style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: 'var(--amber-400)', border: '1px solid var(--amber-400)', borderRadius: 3, padding: '1px 4px', verticalAlign: 'middle', cursor: 'help' }}>
+                        PRO-RATA
+                      </span>
+                    )}
+                  </td>
                   <td style={{ color: 'var(--amber-400)', fontWeight: 500 }}>{fmt(asset.monthlyDepr, 2)}</td>
                   <td style={{ color: 'var(--green-400)', fontWeight: 600 }}>{fmt(asset.closingWdv, 2)}</td>
                 </tr>

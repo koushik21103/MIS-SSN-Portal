@@ -8,6 +8,13 @@ import { RATE_MAP } from '@/lib/depreciation-engine'
  *
  * Returns the full depreciation schedule for all active assets in a FY.
  * Movements (additions/disposals) belong to Asset.movements, filtered by financialYearId.
+ *
+ * Broken-period rules (SLM):
+ *  - Asset acquired BEFORE this FY  → full-year depr on openingWdv
+ *  - Asset acquired WITHIN this FY  → openingWdv is the purchase cost,
+ *    depreciate pro-rata: (remainingMonthsInFY / 12) from purchase month
+ *  - Subsequent additions via movements → pro-rata from movement month
+ *  - Disposals via movements           → pro-rata up to disposal month
  */
 export async function GET(req: NextRequest) {
   const session = await auth()
@@ -35,6 +42,18 @@ export async function GET(req: NextRequest) {
     orderBy: { asset: { name: 'asc' } },
   })
 
+  // FY starts on April 1 of the year indicated by fy.startDate
+  const fyStart = new Date(fy.startDate)
+
+  /**
+   * How many months remain in the FY (including the given month)?
+   * April (JS month 3) → 12, May → 11, … March (JS month 2) → 1
+   */
+  function remainingMonthsInFY(jsMonthIdx: number): number {
+    const monthsFromApril = jsMonthIdx >= 3 ? jsMonthIdx - 3 : jsMonthIdx + 9
+    return 12 - monthsFromApril
+  }
+
   const schedule = balances.map(b => {
     const rate      = RATE_MAP[b.asset.rateEnum]
     const movements = b.asset.movements
@@ -50,11 +69,11 @@ export async function GET(req: NextRequest) {
       const monthIdx = d.getMonth()
       const monthsFromApril = monthIdx >= 3 ? monthIdx - 3 : monthIdx + 9
       const monthsHeld = monthsFromApril + 1
-      const remainingMonths = 12 - monthsFromApril
+      const remaining  = remainingMonthsInFY(monthIdx)
 
       if (m.type === 'ADDITION') {
         additionsTotal += amt
-        additionsDepr += amt * rate * (remainingMonths / 12)
+        additionsDepr += amt * rate * (remaining / 12)
       } else if (m.type === 'DISPOSAL') {
         disposalsTotal += amt
         disposalsDepr += amt * rate * (monthsHeld / 12)
@@ -62,12 +81,26 @@ export async function GET(req: NextRequest) {
     })
 
     const openingWdv = Number(b.openingWdv)
-    const baseWdv = Math.max(0, openingWdv - disposalsTotal)
-    const baseDepr = baseWdv * rate
 
-    const annualDepr = baseDepr + additionsDepr + disposalsDepr
+    // ------------------------------------------------------------------
+    // Determine whether this asset was PURCHASED within the current FY.
+    //   • If yes  → openingWdv IS the purchase cost; apply broken period.
+    //   • If no   → openingWdv is the prior-year closing WDV; full-year rate.
+    // ------------------------------------------------------------------
+    const purchaseDate = new Date(b.asset.purchaseDate)
+    const assetAddedThisFY = purchaseDate >= fyStart
+
+    let baseDepr: number
+    if (assetAddedThisFY) {
+      const remaining = remainingMonthsInFY(purchaseDate.getMonth())
+      baseDepr = Math.max(0, openingWdv - disposalsTotal) * rate * (remaining / 12)
+    } else {
+      baseDepr = Math.max(0, openingWdv - disposalsTotal) * rate
+    }
+
+    const annualDepr  = baseDepr + additionsDepr + disposalsDepr
     const monthlyDepr = annualDepr / 12
-    const closingWdv = openingWdv + additionsTotal - disposalsTotal - annualDepr
+    const closingWdv  = openingWdv + additionsTotal - disposalsTotal - annualDepr
 
     return {
       assetId:          b.assetId,
@@ -76,6 +109,8 @@ export async function GET(req: NextRequest) {
       rateEnum:         b.asset.rateEnum,
       ratePct:          rate * 100,
       isActive:         b.asset.isActive,
+      purchaseDate:     b.asset.purchaseDate,
+      assetAddedThisFY,
       openingWdv,
       additionsTotal,
       disposalsTotal,
