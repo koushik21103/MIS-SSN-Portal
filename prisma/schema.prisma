@@ -74,6 +74,7 @@ model User {
   actuals       Actual[]
   accounts      Account[]
   sessions      Session[]
+  assetRequests AssetEditRequest[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -173,6 +174,8 @@ model Budget {
   accountHeadId   String
   accountHead     AccountHead   @relation(fields: [accountHeadId], references: [id])
   annualAmount    Decimal       @db.Decimal(15, 2)
+  baseAmount      Decimal?      @db.Decimal(15, 2)
+  growthRate      Decimal?      @db.Decimal(15, 2)
   // Monthly splits — April = m1, May = m2, ..., March = m12
   m1              Decimal       @db.Decimal(15, 2) @default(0)
   m2              Decimal       @db.Decimal(15, 2) @default(0)
@@ -263,4 +266,16 @@ model AssetMovement {
   isGte180Days    Boolean       // holdingDays >= 180 → affects depreciation rate
   notes           String?
   createdAt       DateTime      @default(now())
+}
+
+model AssetEditRequest {
+  id              String   @id @default(cuid())
+  financialYearId String
+  assetId         String?  // null if it is a new asset creation
+  action          String   // "CREATE", "UPDATE", "DELETE"
+  payload         String   // JSON string of changes
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  requestedById   String
+  requestedBy     User     @relation(fields: [requestedById], references: [id])
+  createdAt       DateTime @default(now())
 }

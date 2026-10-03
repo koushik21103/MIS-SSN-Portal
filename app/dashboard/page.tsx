@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: 'Overview' }
 
 function formatCurrency(val: number) {
   if (Math.abs(val) >= 1_00_00_000) return `₹${(val / 1_00_00_000).toFixed(2)}Cr`
-  if (Math.abs(val) >= 1_00_000)    return `₹${(val / 1_00_000).toFixed(2)}L`
+  if (Math.abs(val) >= 1_00_000) return `₹${(val / 1_00_000).toFixed(2)}L`
   return `₹${val.toLocaleString('en-IN')}`
 }
 
@@ -16,7 +16,7 @@ export default async function DashboardPage() {
 
   // Fetch active financial year
   const fy = await prisma.financialYear.findFirst({ where: { isActive: true } })
-
+  console.log("fy", fy)
   // Fetch basic stats
   const [budgetCount, actualCount, assetCount, headCount] = await Promise.all([
     prisma.budget.count({ where: fy ? { financialYearId: fy.id } : {} }),
@@ -26,25 +26,31 @@ export default async function DashboardPage() {
   ])
 
   // Get revenue totals from Budget + Actuals
-  const revenueHead = await prisma.accountHead.findFirst({ where: { code: 'SALES_TOTAL' } })
+  const salesTotal = await prisma.accountHead.findFirst({ where: { code: 'SALES_TOTAL' } })
+  const salesChildren = salesTotal ? await prisma.accountHead.findMany({ where: { parentId: salesTotal.id } }) : []
+  const revenueHeads = salesChildren.map(c => c.id)
+
   const [budgetRevenue, actualRevenue] = await Promise.all([
-    revenueHead && fy
-      ? prisma.budget.findFirst({
-          where: { financialYearId: fy.id, accountHeadId: revenueHead.id },
-        })
+    revenueHeads.length > 0 && fy
+      ? prisma.budget.aggregate({
+        where: { financialYearId: fy.id, accountHeadId: { in: revenueHeads } },
+        _sum: { annualAmount: true },
+      })
       : null,
-    revenueHead && fy
+    revenueHeads.length > 0 && fy
       ? prisma.actual.aggregate({
-          where: { financialYearId: fy.id, accountHeadId: revenueHead.id },
-          _sum: { amount: true },
-        })
+        where: { financialYearId: fy.id, accountHeadId: { in: revenueHeads } },
+        _sum: { amount: true },
+      })
       : null,
   ])
 
-  const budgetAnnual = budgetRevenue ? Number(budgetRevenue.annualAmount) : 0
-  const actualYTD    = actualRevenue?._sum?.amount ? Number(actualRevenue._sum.amount) : 0
-  const achievedPct  = budgetAnnual > 0 ? (actualYTD / budgetAnnual) * 100 : 0
-
+  const budgetAnnual = budgetRevenue?._sum?.annualAmount ? Number(budgetRevenue._sum.annualAmount) : 0
+  const actualYTD = actualRevenue?._sum?.amount ? Number(actualRevenue._sum.amount) : 0
+  const achievedPct = budgetAnnual > 0 ? (actualYTD / budgetAnnual) * 100 : 0
+  console.log("Budget revenue: ", budgetRevenue)
+  console.log("Actual revenue: ", actualRevenue)
+  console.log("Achieved Pct: ", achievedPct)
   // Open periods count
   const openPeriods = await prisma.period.count({
     where: fy ? { financialYearId: fy.id, status: 'OPEN' } : {},
@@ -106,11 +112,11 @@ export default async function DashboardPage() {
           </h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {[
-              { label: 'Financial Year',  value: fy?.label ?? '—', ok: !!fy },
-              { label: 'Account Heads',   value: `${headCount} configured`, ok: headCount > 0 },
-              { label: 'Budget Lines',    value: `${budgetCount} entered`,  ok: budgetCount > 0 },
-              { label: 'Actual Entries',  value: `${actualCount} recorded`, ok: actualCount > 0 },
-              { label: 'Asset Register',  value: `${assetCount} assets`,    ok: assetCount > 0 },
+              { label: 'Financial Year', value: fy?.label ?? '—', ok: !!fy },
+              { label: 'Account Heads', value: `${headCount} configured`, ok: headCount > 0 },
+              { label: 'Budget Lines', value: `${budgetCount} entered`, ok: budgetCount > 0 },
+              { label: 'Actual Entries', value: `${actualCount} recorded`, ok: actualCount > 0 },
+              { label: 'Asset Register', value: `${assetCount} assets`, ok: assetCount > 0 },
             ].map(item => (
               <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
                 <span style={{ color: 'var(--text-muted)' }}>{item.label}</span>
@@ -129,23 +135,29 @@ export default async function DashboardPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {(role === 'ADMIN' || role === 'FINANCE') && (
               <a href="/dashboard/actuals" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                 Enter Actuals
               </a>
             )}
             {role === 'ADMIN' && (
               <a href="/dashboard/budget" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                 Manage Budget
               </a>
             )}
             <a href="/dashboard/mis" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" /></svg>
               View MIS P&amp;L
             </a>
+            {(role === 'ADMIN' || role === 'FINANCE' || role === 'CFO') && (
+              <a href="/dashboard/assets" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" /><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+                Manage Assets (Add / Modify / Move)
+              </a>
+            )}
             <a href="/dashboard/depreciation" className="btn btn-secondary" style={{ justifyContent: 'flex-start' }}>
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-              Asset Register
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="15" height="15"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" /></svg>
+              Depreciation Register
             </a>
           </div>
         </div>

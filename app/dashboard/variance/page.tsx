@@ -141,7 +141,7 @@ export default function VariancePage() {
               {filtered.length === 0 ? (
                 <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No items found</td></tr>
               ) : filtered
-                .sort((a, b) => getVar(a) - getVar(b)) // worst first
+                .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) // same ordering as MIS/budget sheet
                 .map(row => {
                   const varVal = getVar(row)
                   const allowed = getAllowed(row)

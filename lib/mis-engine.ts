@@ -30,11 +30,12 @@ import type { AllowedType, HeadType } from '@prisma/client'
 export function computeAllowed(
   allowedType: AllowedType,
   budgetAmount: number,
+  actualAmount: number,
   budgetRevenue: number,
   actualRevenue: number,
 ): number {
   if (allowedType === 'FIXED') return budgetAmount
-  if (budgetRevenue === 0) return budgetAmount // avoid division by zero
+  if (budgetRevenue === 0) return budgetAmount // fallback to budget if no budget revenue
   return (actualRevenue / budgetRevenue) * budgetAmount
 }
 
@@ -121,9 +122,10 @@ export function buildPLRows(params: {
   revenueHeadId?:      string
   perMonthBudgetRevenue?: Record<number, number>   // { 1: 5000, 2: 5200, … }
   perMonthActualRevenue?: Record<number, number>   // { 1: 4800, 2: 5100, … }
+  monthsWithActuals?:  number[]
 }): PLRow[] {
   const { month, budgetMap, actualMap, heads, budgetRevenue, actualRevenue,
-          perMonthBudgetRevenue, perMonthActualRevenue } = params
+          perMonthBudgetRevenue, perMonthActualRevenue, monthsWithActuals } = params
 
   return heads.map(head => {
     const budgetRecord = budgetMap[head.id] ?? {}
@@ -131,26 +133,58 @@ export function buildPLRows(params: {
 
     const monthKey = `m${month}` as keyof typeof budgetRecord
     const budget   = (budgetRecord[monthKey] as number) ?? 0
-    const actual   = actualRecord[month] ?? 0
-    const allowed  = computeAllowed(head.allowedType, budget, budgetRevenue, actualRevenue)
-    const variance = computeVariance(allowed, actual, head.type)
+    const hasActualsForMonth = !monthsWithActuals || monthsWithActuals.includes(month)
+    const actual   = hasActualsForMonth ? (actualRecord[month] ?? 0) : 0
 
-    // YTD: sum months 1 → current month
+    let actualYTD = 0
+    if (hasActualsForMonth) {
+      if (head.code === 'OPEN_STOCK') {
+        actualYTD = actualRecord[1] ?? 0
+      } else if (head.code === 'CLOSE_STOCK') {
+        actualYTD = actualRecord[month] ?? 0
+      } else {
+        actualYTD = computeYTD(actualRecord, month)
+      }
+    }
+
     const budgetYTD = computeYTD(
       Object.fromEntries(Array.from({ length: 12 }, (_, i) => [i + 1, (budgetRecord[`m${i + 1}` as keyof typeof budgetRecord] as number) ?? 0])),
       month,
     )
-    const actualYTD = computeYTD(actualRecord, month)
 
-    // YTD allowed: sum per-month allowed values using per-month revenues (accurate proration)
+    let allowed = 0
     let allowedYTD = 0
-    for (let m = 1; m <= month; m++) {
-      const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
-      const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
-      const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
-      allowedYTD  += computeAllowed(head.allowedType, bAmt, bRev, aRev)
+
+    if (head.code === 'OPEN_STOCK' || head.code === 'CLOSE_STOCK') {
+      const annualBudget = (budgetRecord['annualAmount'] as number) ?? 0
+      if (!monthsWithActuals || monthsWithActuals.includes(month)) {
+        allowed = annualBudget
+      }
+      if (hasActualsForMonth) {
+        allowedYTD = annualBudget
+      }
+    } else if (head.type === 'REVENUE' || head.type === 'INDIRECT_INCOME') {
+      allowed = actual
+      allowedYTD = actualYTD
+    } else {
+      if (!monthsWithActuals || monthsWithActuals.includes(month)) {
+        allowed = computeAllowed(head.allowedType, budget, actual, budgetRevenue, actualRevenue)
+      }
+      if (hasActualsForMonth) {
+        for (let m = 1; m <= month; m++) {
+          if (!monthsWithActuals || monthsWithActuals.includes(m)) {
+            const bAmt   = (budgetRecord[`m${m}` as keyof typeof budgetRecord] as number) ?? 0
+            const aAmt   = actualRecord[m] ?? 0
+            const bRev   = perMonthBudgetRevenue?.[m] ?? budgetRevenue
+            const aRev   = perMonthActualRevenue?.[m] ?? (m === month ? actualRevenue : 0)
+            allowedYTD  += computeAllowed(head.allowedType, bAmt, aAmt, bRev, aRev)
+          }
+        }
+      }
     }
-    const varianceYTD = computeVariance(allowedYTD, actualYTD, head.type)
+
+    const variance = computeVariance(allowed, actual, head.type)
+    const varianceYTD = hasActualsForMonth ? computeVariance(allowedYTD, actualYTD, head.type) : 0
 
     const pctBudget = computePctOfSales(budget, budgetRevenue)
     const pctActual = computePctOfSales(actual, actualRevenue)

@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { PLBarChart, MonthlyComparisonChart, type MonthlyHeadDataPoint } from '@/components/charts/PLCharts'
+import { useFY } from '@/components/FYProvider'
 
-const MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar']
+const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
 
 type PLRow = {
   accountHeadId: string; code: string; name: string; type: string
@@ -16,7 +18,7 @@ function fmtCr(n: number) {
   if (n === 0) return '—'
   const abs = Math.abs(n)
   if (abs >= 1_00_00_000) return `${n < 0 ? '-' : ''}${(abs / 1_00_00_000).toFixed(2)}Cr`
-  if (abs >= 1_00_000)    return `${n < 0 ? '-' : ''}${(abs / 1_00_000).toFixed(2)}L`
+  if (abs >= 1_00_000) return `${n < 0 ? '-' : ''}${(abs / 1_00_000).toFixed(2)}L`
   return n.toLocaleString('en-IN', { maximumFractionDigits: 0 })
 }
 
@@ -26,11 +28,11 @@ function fmtPct(n: number) {
 }
 
 const TYPE_SECTIONS = [
-  { type: 'REVENUE',          label: 'Sales / Revenue',    subtotal: 'SALES_TOTAL' },
-  { type: 'COGS',             label: 'Cost of Sales',       subtotal: 'COGS_TOTAL'  },
-  { type: 'DIRECT_EXPENSE',   label: 'Direct Expenses',     subtotal: 'DIREXP_TOTAL' },
-  { type: 'INDIRECT_INCOME',  label: 'Indirect Income',     subtotal: 'INDINC_TOTAL' },
-  { type: 'INDIRECT_EXPENSE', label: 'Indirect Expenses',   subtotal: 'INDEXP_TOTAL' },
+  { type: 'REVENUE', label: 'Sales / Revenue', subtotal: 'SALES_TOTAL' },
+  { type: 'COGS', label: 'Cost of Sales', subtotal: 'COGS_TOTAL' },
+  { type: 'DIRECT_EXPENSE', label: 'Direct Expenses', subtotal: 'DIREXP_TOTAL' },
+  { type: 'INDIRECT_INCOME', label: 'Indirect Income', subtotal: 'INDINC_TOTAL' },
+  { type: 'INDIRECT_EXPENSE', label: 'Indirect Expenses', subtotal: 'INDEXP_TOTAL' },
 ]
 
 function VarBadge({ value, type }: { value: number; type: string }) {
@@ -45,54 +47,127 @@ function VarBadge({ value, type }: { value: number; type: string }) {
 }
 
 export default function MISPage() {
-  const [fyId, setFyId]     = useState('')
-  const [fyLabel, setFyLabel] = useState('')
-  const [month, setMonth]   = useState(1)
-  const [view, setView]     = useState<'monthly' | 'ytd'>('monthly')
-  const [rows, setRows]     = useState<PLRow[]>([])
-  const [budgetRev, setBudgetRev] = useState(0)
-  const [actualRev, setActualRev] = useState(0)
+  const { fyId, fyLabel } = useFY()
+  const [month, setMonth] = useState(0) // 0 implies uninitialized
+  const [segment, setSegment] = useState<'ALL' | 'MFG_LAB' | 'DND'>('ALL')
+  const [view, setView] = useState<'monthly' | 'ytd'>('monthly')
+  const [showChart, setShowChart] = useState(false)
+  const [rows, setRows] = useState<PLRow[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    async function loadFY() {
-      const res  = await fetch('/api/fy/active')
-      const data = await res.json()
-      if (data?.id) {
-        setFyId(data.id)
-        setFyLabel(data.label)
-        const now = new Date()
-        const fm  = now.getMonth() >= 3 ? now.getMonth() - 2 : now.getMonth() + 10
-        setMonth(Math.min(fm, 12))
-      }
-    }
-    loadFY()
-  }, [])
+  // 12-month head comparison chart
+  const [selectedHead, setSelectedHead] = useState<{ id: string; name: string; code: string } | null>(null)
+  const [monthlyHeadData, setMonthlyHeadData] = useState<MonthlyHeadDataPoint[]>([])
+  const [monthlyHeadLoading, setMonthlyHeadLoading] = useState(false)
+  const [showMonthlyHeadChart, setShowMonthlyHeadChart] = useState(true)
 
   useEffect(() => {
-    if (!fyId || !month) return
-    setLoading(true)
-    fetch(`/api/mis/pl?fyId=${fyId}&month=${month}`)
-      .then(r => r.json())
+    async function load() {
+      if (!fyId) return
+      setLoading(true)
+
+      let selectedMonth = month
+      // Auto-select OPEN month if this is the first load for a new FY
+      if (!month) {
+        const pRes = await fetch(`/api/periods?fyId=${fyId}`)
+        const pData = await pRes.json()
+        const open = Array.isArray(pData) ? pData.find(p => p.status === 'OPEN') : null
+        selectedMonth = open ? open.month : 1
+        setMonth(selectedMonth)
+      }
+
+      const mRes = await fetch(`/api/mis/pl?fyId=${fyId}&month=${selectedMonth}&segment=${segment}`)
+      const mData = await mRes.json()
+      setRows(mData.rows || [])
+      setLoading(false)
+    }
+    load()
+  }, [fyId, month, segment])
+
+  useEffect(() => {
+    if (!fyId || !selectedHead) return
+    setMonthlyHeadLoading(true)
+    fetch(`/api/mis/head-monthly?fyId=${fyId}&headId=${selectedHead.id}`)
+      .then(res => res.json())
       .then(data => {
-        setRows(data.rows ?? [])
-        setBudgetRev(data.budgetRevenue ?? 0)
-        setActualRev(data.actualRevenue ?? 0)
-        setLoading(false)
+        setMonthlyHeadData(data.months || [])
+        setMonthlyHeadLoading(false)
       })
-  }, [fyId, month])
+      .catch(() => setMonthlyHeadLoading(false))
+  }, [fyId, selectedHead])
 
   // Group rows by type, keep parent rows and child rows separate
   const rowMap = Object.fromEntries(rows.map(r => [r.code, r]))
 
-  const b = (r: PLRow) => view === 'monthly' ? r.budget    : r.budgetYTD
-  const a = (r: PLRow) => view === 'monthly' ? r.actual    : r.actualYTD
-  const al= (r: PLRow) => view === 'monthly' ? r.allowed   : r.allowedYTD
-  const v = (r: PLRow) => view === 'monthly' ? r.variance  : r.varianceYTD
-  const pb= (r: PLRow) => r.pctBudget
-  const pa= (r: PLRow) => r.pctActual
+  const b = (r: PLRow) => view === 'monthly' ? r.budget : r.budgetYTD
+  const a = (r: PLRow) => view === 'monthly' ? r.actual : r.actualYTD
+  const al = (r: PLRow) => view === 'monthly' ? r.allowed : r.allowedYTD
+  const v = (r: PLRow) => view === 'monthly' ? r.variance : r.varianceYTD
+  const pb = (r: PLRow) => r.pctBudget
+  const pa = (r: PLRow) => r.pctActual
+  const getRow = (code: string) => rows.find(r => r.code === code)
+
+  const salesChildren = rows.filter(r => r.parentId === getRow('SALES_TOTAL')?.accountHeadId)
+  const purchChildren = rows.filter(r => r.parentId === getRow('PURCH_TOTAL')?.accountHeadId)
+
+  const bRev = salesChildren.reduce((sum, h) => sum + (h ? b(h) : 0), 0)
+  const aRev = salesChildren.reduce((sum, h) => sum + (h ? a(h) : 0), 0)
+                
+  const sumObjs = (...objs: any[]) => objs.reduce((acc, r) => {
+    if (!r) return acc
+    return {
+      budget: acc.budget + (r.budget||0),
+      actual: acc.actual + (r.actual||0),
+      allowed: acc.allowed + (r.allowed||0),
+      variance: acc.variance + (r.variance||0),
+      budgetYTD: acc.budgetYTD + (r.budgetYTD||0),
+      actualYTD: acc.actualYTD + (r.actualYTD||0),
+      allowedYTD: acc.allowedYTD + (r.allowedYTD||0),
+      varianceYTD: acc.varianceYTD + (r.varianceYTD||0),
+    }
+  }, { budget:0, actual:0, allowed:0, variance:0, budgetYTD:0, actualYTD:0, allowedYTD:0, varianceYTD:0 })
+
+  const subObj = (a: any, b: any) => ({
+    budget: (a?.budget||0) - (b?.budget||0),
+    actual: (a?.actual||0) - (b?.actual||0),
+    allowed: (a?.allowed||0) - (b?.allowed||0),
+    variance: (a?.variance||0) - (b?.variance||0),
+    budgetYTD: (a?.budgetYTD||0) - (b?.budgetYTD||0),
+    actualYTD: (a?.actualYTD||0) - (b?.actualYTD||0),
+    allowedYTD: (a?.allowedYTD||0) - (b?.allowedYTD||0),
+    varianceYTD: (a?.varianceYTD||0) - (b?.varianceYTD||0),
+  })
+
+  const salesObj = sumObjs(...salesChildren)
+  const purchObj = sumObjs(...purchChildren)
+  const consumpObj = subObj(sumObjs(getRow('OPEN_STOCK'), purchObj), getRow('CLOSE_STOCK'))
+  
+  const dirExpChildren = rows.filter(r => r.parentId === getRow('DIREXP_TOTAL')?.accountHeadId)
+  const dirExpObj = sumObjs(...dirExpChildren)
+  const cogsObj = sumObjs(consumpObj, dirExpObj)
+  const gpObj = subObj(salesObj, cogsObj)
+  gpObj.variance = gpObj.actual - gpObj.allowed
+  gpObj.varianceYTD = gpObj.actualYTD - gpObj.allowedYTD
+
+  const indIncChildren = rows.filter(r => r.parentId === getRow('INDINC_TOTAL')?.accountHeadId)
+  const indIncObj = sumObjs(...indIncChildren)
+  
+  const indExpChildren = rows.filter(r => r.parentId === getRow('INDEXP_TOTAL')?.accountHeadId)
+  const indExpObj = sumObjs(...indExpChildren)
+
+  const npObj = subObj(sumObjs(gpObj, indIncObj), indExpObj)
+  npObj.variance = npObj.actual - npObj.allowed
+  npObj.varianceYTD = npObj.actualYTD - npObj.allowedYTD
+
+  const npActual = view === 'monthly' ? npObj.actual : npObj.actualYTD
+  const npAllowed = view === 'monthly' ? npObj.allowed : npObj.allowedYTD
+  const npBudget = view === 'monthly' ? npObj.budget : npObj.budgetYTD
+  const npVarAllowed = view === 'monthly' ? npObj.variance : npObj.varianceYTD
+  const npVarBudget = npActual - npBudget
 
   const colStyle: React.CSSProperties = { minWidth: 110, fontVariantNumeric: 'tabular-nums' }
+
+  const formatMoney = (n: number) => n === 0 ? '—' : (n < 0 ? '-₹' : '₹') + fmtCr(Math.abs(n)).replace(/^-/, '')
 
   return (
     <div>
@@ -103,6 +178,24 @@ export default function MISPage() {
           <p className="page-subtitle">FY {fyLabel} · Budget vs Actual vs Allowed vs Variance</p>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {/* Export PDF */}
+          <button id="mis-export-pdf" className="btn btn-secondary" onClick={() => window.print()} style={{ fontSize: 12.5, padding: '7px 12px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+              <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+            </svg>
+            Print PDF
+          </button>
+          {/* Chart toggle */}
+          <button id="mis-chart-toggle"
+            onClick={() => setShowChart(c => !c)}
+            className={`btn ${showChart ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: 12.5, padding: '7px 12px' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" width="14" height="14">
+              <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" /><line x1="2" y1="20" x2="22" y2="20" />
+            </svg>
+            Chart
+          </button>
           {/* View toggle */}
           <div style={{ display: 'flex', background: 'var(--surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
             {(['monthly', 'ytd'] as const).map(v => (
@@ -111,7 +204,7 @@ export default function MISPage() {
                 style={{
                   padding: '7px 14px', fontSize: 12.5, fontWeight: 500,
                   background: view === v ? 'rgba(99,102,241,0.15)' : 'transparent',
-                  color:      view === v ? 'var(--indigo-400)' : 'var(--text-secondary)',
+                  color: view === v ? 'var(--indigo-400)' : 'var(--text-secondary)',
                   border: 'none', cursor: 'pointer',
                 }}
               >
@@ -119,6 +212,12 @@ export default function MISPage() {
               </button>
             ))}
           </div>
+          {/* Segment selector */}
+          <select id="mis-segment-select" value={segment} onChange={e => setSegment(e.target.value as 'ALL' | 'MFG_LAB' | 'DND')} className="select" style={{ width: 140 }}>
+            <option value="ALL">All Segments</option>
+            <option value="MFG_LAB">MFG & Lab</option>
+            <option value="DND">D & D</option>
+          </select>
           {/* Month selector */}
           <select id="mis-month-select" value={month} onChange={e => setMonth(parseInt(e.target.value))} className="select" style={{ width: 140 }}>
             {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m} {i < 9 ? '2026' : '2027'}</option>)}
@@ -126,49 +225,127 @@ export default function MISPage() {
         </div>
       </div>
 
+      {/* Chart panel */}
+      {showChart && !loading && (() => {
+        const SKIP = ['GROSS_PROFIT', 'NET_PROFIT', 'SALES_TOTAL', 'COGS_TOTAL', 'DIREXP_TOTAL', 'INDINC_TOTAL', 'INDEXP_TOTAL', 'PURCH_TOTAL']
+        const chartRows = rows.filter(r => !SKIP.includes(r.code) && r.parentId !== null)
+        const chartData = chartRows.map(r => ({
+          name: r.name,
+          budget: view === 'monthly' ? r.budget : r.budgetYTD,
+          actual: view === 'monthly' ? r.actual : r.actualYTD,
+          allowed: view === 'monthly' ? r.allowed : r.allowedYTD,
+          type: r.type,
+        }))
+        return (
+          <div className="card" style={{ marginBottom: 20 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
+              Budget vs Actual vs Allowed — {view === 'monthly' ? MONTHS[month - 1] : `YTD Apr–${MONTHS[month - 1]}`}
+            </p>
+            <PLBarChart data={chartData} height={300} viewLabel={`${view === 'monthly' ? MONTHS[month - 1] : 'YTD'}`} />
+          </div>
+        )
+      })()}
+
+
       {/* Revenue KPIs */}
       <div className="kpi-grid" style={{ marginBottom: 20 }}>
         <div className="kpi-card">
-          <p className="kpi-label">Budget Revenue ({MONTHS[month - 1]})</p>
-          <p className="kpi-value">₹{fmtCr(budgetRev)}</p>
+          <p className="kpi-label">Budget Revenue ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <p className="kpi-value">₹{fmtCr(bRev)}</p>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Actual Revenue ({MONTHS[month - 1]})</p>
-          <p className="kpi-value">₹{fmtCr(actualRev)}</p>
+          <p className="kpi-label">Actual Revenue ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <p className="kpi-value">₹{fmtCr(aRev)}</p>
           <p className="kpi-sub">
-            <span className={actualRev >= budgetRev ? 'kpi-positive' : 'kpi-negative'}>
-              {budgetRev > 0 ? ((actualRev / budgetRev) * 100).toFixed(1) + '% of budget' : '—'}
+            <span className={aRev >= bRev ? 'kpi-positive' : 'kpi-negative'}>
+              {bRev > 0 ? ((aRev / bRev) * 100).toFixed(1) + '% of budget' : '—'}
             </span>
           </p>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Variance (Revenue)</p>
-          {(() => {
-            const rev = rowMap['SALES_TOTAL']
-            const var_ = rev ? v(rev) : 0
-            return <>
-              <p className="kpi-value" style={{ color: var_ >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                ₹{fmtCr(Math.abs(var_))}
-              </p>
-              <p className="kpi-sub"><span className={var_ >= 0 ? 'kpi-positive' : 'kpi-negative'}>
-                {var_ >= 0 ? 'Favorable' : 'Unfavorable'}
-              </span></p>
-            </>
-          })()}
+          <p className="kpi-label">Net Profit ({view === 'monthly' ? MONTHS[month - 1] : 'YTD'})</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>BUDGET</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npBudget)}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ACTUAL</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npActual >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npActual)}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>ALLOWED</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npAllowed)}</span>
+            </div>
+          </div>
         </div>
         <div className="kpi-card">
-          <p className="kpi-label">Net Profit (Allowed)</p>
-          {(() => {
-            const np = rowMap['NET_PROFIT']
-            const val = np ? al(np) : 0
-            return <>
-              <p className="kpi-value" style={{ color: val >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>
-                ₹{fmtCr(Math.abs(val))}
-              </p>
-            </>
-          })()}
+          <p className="kpi-label">Variance (Net Profit)</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>VS BUDGET</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npVarBudget >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npVarBudget)}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>VS ALLOWED</span>
+              <span className="kpi-value" style={{ fontSize: 18, color: npVarAllowed >= 0 ? 'var(--green-400)' : 'var(--red-400)' }}>{formatMoney(npVarAllowed)}</span>
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* 12-Month Head Comparison Chart */}
+      {selectedHead && (
+        <div className="card" style={{ marginBottom: 20, border: '1px solid rgba(99,102,241,0.3)', background: 'var(--surface-1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showMonthlyHeadChart ? 16 : 0, flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--indigo-400)' }} />
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+                12-Month Monthly Comparison: <span style={{ color: 'var(--indigo-400)' }}>{selectedHead.name}</span>
+              </h3>
+              {/* Account head quick selector */}
+              <select
+                className="select"
+                style={{ fontSize: 12, padding: '4px 8px', height: 28, minWidth: 220 }}
+                value={selectedHead.id}
+                onChange={e => {
+                  const h = rows.find(r => r.accountHeadId === e.target.value)
+                  if (h) setSelectedHead({ id: h.accountHeadId, name: h.name, code: h.code })
+                }}
+              >
+                {rows.filter(r => r.parentId !== null).map(r => (
+                  <option key={r.accountHeadId} value={r.accountHeadId}>{r.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 11, padding: '4px 10px' }}
+                onClick={() => setShowMonthlyHeadChart(v => !v)}
+              >
+                {showMonthlyHeadChart ? 'Collapse Chart' : 'Expand Chart'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: 14, padding: '2px 8px', color: 'var(--text-muted)' }}
+                onClick={() => setSelectedHead(null)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {showMonthlyHeadChart && (
+            monthlyHeadLoading ? (
+              <div className="skeleton" style={{ height: 260 }} />
+            ) : (
+              <MonthlyComparisonChart data={monthlyHeadData} headName={selectedHead.name} height={280} />
+            )
+          )}
+        </div>
+      )}
 
       {/* P&L Table */}
       {loading ? (
@@ -190,19 +367,35 @@ export default function MISPage() {
               </tr>
             </thead>
             <tbody>
-              {TYPE_SECTIONS.map(section => {
-                const sectionRows = rows.filter(r => r.type === section.type && r.parentId !== null)
-                const totalRow    = rows.find(r => r.code === section.subtotal)
-                if (!totalRow && !sectionRows.length) return null
-
-                return [
-                  <tr key={`hdr-${section.type}`} className="row-header">
-                    <td colSpan={7}>{section.label}</td>
-                  </tr>,
-
-                  ...sectionRows.map(row => (
-                    <tr key={row.accountHeadId}>
-                      <td style={{ paddingLeft: 28, fontSize: '12.5px', color: 'var(--text-secondary)', position: 'sticky', left: 0, background: 'var(--surface-2)' }}>
+              {(() => {
+                const renderRow = (code: string) => {
+                  const row = getRow(code)
+                  if (!row) return null
+                  const isSelected = selectedHead?.id === row.accountHeadId
+                  return (
+                    <tr
+                      key={row.accountHeadId}
+                      onClick={() => {
+                        setSelectedHead({ id: row.accountHeadId, name: row.name, code: row.code })
+                        setShowMonthlyHeadChart(true)
+                      }}
+                      style={{
+                        cursor: 'pointer',
+                        background: isSelected ? 'rgba(99,102,241,0.08)' : undefined,
+                        transition: 'background 0.15s',
+                      }}
+                      title="Click to view 12-month comparison chart"
+                    >
+                      <td style={{
+                        paddingLeft: 28,
+                        fontSize: '12.5px',
+                        color: isSelected ? 'var(--indigo-300)' : 'var(--text-secondary)',
+                        position: 'sticky',
+                        left: 0,
+                        background: isSelected ? 'rgba(99,102,241,0.18)' : 'var(--surface-2)',
+                        fontWeight: isSelected ? 600 : 400,
+                      }}>
+                        <span style={{ marginRight: 6, fontSize: 11, opacity: isSelected ? 1 : 0.4 }}>📊</span>
                         {row.name}
                       </td>
                       <td>{fmtCr(b(row))}</td>
@@ -212,55 +405,71 @@ export default function MISPage() {
                       <td style={{ color: 'var(--amber-400)' }}>{fmtCr(al(row))}</td>
                       <td><VarBadge value={v(row)} type={row.type} /></td>
                     </tr>
-                  )),
+                  )
+                }
 
-                  totalRow ? (
-                    <tr key={`total-${section.type}`} className="row-total">
-                      <td style={{ paddingLeft: 14, position: 'sticky', left: 0, background: 'rgba(99,102,241,0.05)' }}>
-                        {totalRow.name}
-                      </td>
-                      <td>{fmtCr(b(totalRow))}</td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtPct(pb(totalRow))}</td>
-                      <td>{fmtCr(a(totalRow))}</td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fmtPct(pa(totalRow))}</td>
-                      <td style={{ color: 'var(--amber-400)' }}>{fmtCr(al(totalRow))}</td>
-                      <td><VarBadge value={v(totalRow)} type={totalRow.type} /></td>
+                const renderSubtotalRow = (label: string, computed: any, level: 'primary' | 'secondary' | 'tertiary' = 'secondary') => {
+                  let bg = 'var(--surface-3)'
+                  let color = 'var(--text-primary)'
+                  let highlight = 'var(--indigo-400)'
+                  let subtext = 'var(--text-secondary)'
+                  
+                  if (level === 'primary') {
+                    bg = 'var(--indigo-600)'
+                    color = '#fff'
+                    highlight = '#fff'
+                    subtext = 'rgba(255,255,255,0.7)'
+                  } else if (level === 'tertiary') {
+                    bg = 'var(--surface-2)'
+                  }
+
+                  const revB = b(salesObj)
+                  const revA = a(salesObj)
+                  const pctB = revB ? (b(computed) / revB * 100) : 0
+                  const pctA = revA ? (a(computed) / revA * 100) : 0
+
+                  return (
+                    <tr key={`subtotal-${label}`} style={{ background: bg, fontWeight: 600 }}>
+                      <td style={{ position: 'sticky', left: 0, background: bg, zIndex: 1, paddingLeft: 14, color: color }}>{label}</td>
+                      <td style={{ color: highlight }}>{fmtCr(b(computed))}</td>
+                      <td style={{ color: subtext, fontSize: 12 }}>{pctB !== 0 ? pctB.toFixed(1) + '%' : '—'}</td>
+                      <td style={{ color: level==='primary'?'#fff':'' }}>{fmtCr(a(computed))}</td>
+                      <td style={{ color: subtext, fontSize: 12 }}>{pctA !== 0 ? pctA.toFixed(1) + '%' : '—'}</td>
+                      <td style={{ color: level==='primary'?'#ffd54f':'var(--amber-400)' }}>{fmtCr(al(computed))}</td>
+                      <td><VarBadge value={v(computed)} type="REVENUE" /></td>
                     </tr>
-                  ) : null,
+                  )
+                }
 
-                  // Gross Profit after DIRECT_EXPENSE
-                  section.type === 'DIRECT_EXPENSE' && rowMap['GROSS_PROFIT'] ? (
-                    <tr key="gross-profit" className="row-total" style={{ background: 'rgba(99,102,241,0.08)' }}>
-                      <td style={{ position: 'sticky', left: 0, background: 'rgba(99,102,241,0.08)', color: 'var(--indigo-400)' }}>
-                        Gross Profit
-                      </td>
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(b(rowMap['GROSS_PROFIT']))}</td>
-                      <td />
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(a(rowMap['GROSS_PROFIT']))}</td>
-                      <td />
-                      <td style={{ color: 'var(--indigo-400)' }}>{fmtCr(al(rowMap['GROSS_PROFIT']))}</td>
-                      <td><VarBadge value={v(rowMap['GROSS_PROFIT'])} type="REVENUE" /></td>
-                    </tr>
-                  ) : null,
-                ]
-              })}
+                return (
+                  <>
+                    {renderSubtotalRow('Sales Accounts', salesObj, 'secondary')}
+                    {salesChildren.map(h => renderRow(h.code))}
 
-              {/* Net Profit */}
-              {rowMap['NET_PROFIT'] && (
-                <tr className="row-total" style={{ borderTop: '2px solid rgba(99,102,241,0.3)' }}>
-                  <td style={{ position: 'sticky', left: 0, background: 'rgba(99,102,241,0.1)', fontSize: 14, color: 'var(--indigo-400)' }}>
-                    Net Profit
-                  </td>
-                  <td style={{ color: 'var(--indigo-400)', fontSize: 14 }}>{fmtCr(b(rowMap['NET_PROFIT']))}</td>
-                  <td />
-                  <td style={{ color: rowMap['NET_PROFIT'].actual >= 0 ? 'var(--green-400)' : 'var(--red-400)', fontSize: 14 }}>
-                    {fmtCr(a(rowMap['NET_PROFIT']))}
-                  </td>
-                  <td />
-                  <td style={{ color: 'var(--amber-400)', fontSize: 14 }}>{fmtCr(al(rowMap['NET_PROFIT']))}</td>
-                  <td><VarBadge value={v(rowMap['NET_PROFIT'])} type="REVENUE" /></td>
-                </tr>
-              )}
+                    {renderSubtotalRow('Cost of Sales', cogsObj, 'secondary')}
+                    {renderRow('OPEN_STOCK')}
+                    
+                    {renderSubtotalRow('Add: Purchase Accounts', purchObj, 'tertiary')}
+                    {purchChildren.map(h => renderRow(h.code))}
+                    
+                    {renderRow('CLOSE_STOCK')}
+                    {renderSubtotalRow('Consumption', consumpObj, 'tertiary')}
+                    
+                    {renderSubtotalRow('Direct Expenses', dirExpObj, 'tertiary')}
+                    {dirExpChildren.map(h => renderRow(h.code))}
+                    
+                    {renderSubtotalRow('Gross Profit', gpObj, 'primary')}
+
+                    {renderSubtotalRow('Indirect Incomes', indIncObj, 'secondary')}
+                    {indIncChildren.map(h => renderRow(h.code))}
+
+                    {renderSubtotalRow('Indirect Expenses', indExpObj, 'secondary')}
+                    {indExpChildren.map(h => renderRow(h.code))}
+
+                    {renderSubtotalRow('Net Profit', npObj, 'primary')}
+                  </>
+                )
+              })()}
             </tbody>
           </table>
         </div>

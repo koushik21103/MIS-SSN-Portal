@@ -21,14 +21,22 @@ export async function GET(req: NextRequest) {
 
   const fyId  = req.nextUrl.searchParams.get('fyId')
   const month = parseInt(req.nextUrl.searchParams.get('month') ?? '1')
+  const segment = req.nextUrl.searchParams.get('segment') || 'ALL'
 
   if (!fyId || isNaN(month) || month < 1 || month > 12) {
     return NextResponse.json({ error: 'fyId and valid month (1–12) required' }, { status: 400 })
   }
 
   // ── Fetch all active account heads ─────────────────────────────────────────
+  const whereClause: any = { isActive: true }
+  if (segment === 'MFG_LAB') {
+    whereClause.segment = { in: ['MFG_LAB', 'CONSOLIDATED'] }
+  } else if (segment === 'DND') {
+    whereClause.segment = { in: ['DND', 'CONSOLIDATED'] }
+  }
+
   const heads = await prisma.accountHead.findMany({
-    where:   { isActive: true },
+    where:   whereClause,
     orderBy: { sortOrder: 'asc' },
   })
 
@@ -53,32 +61,49 @@ export async function GET(req: NextRequest) {
     where: { financialYearId: fyId, month: { lte: month } },
   })
 
+  const submittedPeriods = await prisma.period.findMany({
+    where: { financialYearId: fyId, submittedAt: { not: null } }
+  })
+  const submittedMonths = new Set(submittedPeriods.map(p => p.month))
+
   const actualMap: Record<string, Record<number, number>> = {}
+  const monthsWithActualsSet = new Set<number>()
   for (const a of actuals) {
     if (!actualMap[a.accountHeadId]) actualMap[a.accountHeadId] = {}
     actualMap[a.accountHeadId][a.month] = Number(a.amount)
+    if (Number(a.amount) !== 0 && submittedMonths.has(a.month)) {
+      monthsWithActualsSet.add(a.month)
+    }
+  }
+  const monthsWithActuals = Array.from(monthsWithActualsSet)
+
+  // ── Revenue heads for proration ────────────────────────────────────────────
+  const salesTotal = heads.find(h => h.code === 'SALES_TOTAL')
+  const revenueHeads = salesTotal ? heads.filter(h => h.parentId === salesTotal.id) : []
+
+  const getBudRev = (m: number) => {
+    return revenueHeads.reduce((sum, h) => {
+      return sum + (Number((budgetMap[h.id] ?? {})[`m${m}`]) || 0)
+    }, 0)
   }
 
-  // ── Revenue head for proration ─────────────────────────────────────────────
-  const revenueHead = heads.find(h => h.code === 'SALES_TOTAL')
+  const getActRev = (m: number) => {
+    return revenueHeads.reduce((sum, h) => {
+      return sum + (Number(actualMap[h.id]?.[m]) || 0)
+    }, 0)
+  }
 
   // Monthly budget revenue for selected month
-  const budgetRevenue = revenueHead
-    ? ((budgetMap[revenueHead.id] ?? {})[`m${month}`] ?? 0)
-    : 0
+  const budgetRevenue = getBudRev(month)
   // Monthly actual revenue for selected month
-  const actualRevenue = revenueHead
-    ? (actualMap[revenueHead.id]?.[month] ?? 0)
-    : 0
+  const actualRevenue = getActRev(month)
 
   // ── Per-month revenue for YTD allowed proration ────────────────────────────
   const perMonthBudgetRevenue: Record<number, number> = {}
   const perMonthActualRevenue: Record<number, number> = {}
-  if (revenueHead) {
-    for (let m = 1; m <= month; m++) {
-      perMonthBudgetRevenue[m] = (budgetMap[revenueHead.id] ?? {})[`m${m}`] ?? 0
-      perMonthActualRevenue[m] = actualMap[revenueHead.id]?.[m] ?? 0
-    }
+  for (let m = 1; m <= month; m++) {
+    perMonthBudgetRevenue[m] = getBudRev(m)
+    perMonthActualRevenue[m] = getActRev(m)
   }
 
   // ── Build P&L rows ─────────────────────────────────────────────────────────
@@ -99,6 +124,7 @@ export async function GET(req: NextRequest) {
     actualRevenue,
     perMonthBudgetRevenue,
     perMonthActualRevenue,
+    monthsWithActuals,
   })
 
   return NextResponse.json({

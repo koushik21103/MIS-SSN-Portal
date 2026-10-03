@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const session = await auth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const fyId  = req.nextUrl.searchParams.get('fyId')
+  const fyId = req.nextUrl.searchParams.get('fyId')
   const month = req.nextUrl.searchParams.get('month')
 
   if (!fyId) return NextResponse.json({ error: 'fyId required' }, { status: 400 })
@@ -22,15 +22,43 @@ export async function GET(req: NextRequest) {
     orderBy: [{ month: 'asc' }, { accountHead: { sortOrder: 'asc' } }],
   })
 
-  return NextResponse.json(actuals)
+  let prevCloseStock: number | null = null
+  const closeStockHead = await prisma.accountHead.findFirst({ where: { code: 'CLOSE_STOCK' } })
+  
+  if (closeStockHead && month) {
+    const m = parseInt(month)
+    if (m > 1) {
+      const prevActual = await prisma.actual.findFirst({
+        where: { financialYearId: fyId, accountHeadId: closeStockHead.id, month: m - 1 }
+      })
+      if (prevActual) prevCloseStock = Number(prevActual.amount)
+    } else {
+      // m === 1, get prev FY month 12
+      const currentFy = await prisma.financialYear.findUnique({ where: { id: fyId } })
+      if (currentFy) {
+        const prevFy = await prisma.financialYear.findFirst({
+          where: { endDate: { lte: currentFy.startDate } },
+          orderBy: { endDate: 'desc' }
+        })
+        if (prevFy) {
+          const prevActual = await prisma.actual.findFirst({
+            where: { financialYearId: prevFy.id, accountHeadId: closeStockHead.id, month: 12 }
+          })
+          if (prevActual) prevCloseStock = Number(prevActual.amount)
+        }
+      }
+    }
+  }
+
+  return NextResponse.json({ actuals, prevCloseStock })
 }
 
 const actualSchema = z.object({
   financialYearId: z.string(),
-  accountHeadId:   z.string(),
-  month:           z.number().int().min(1).max(12),
-  amount:          z.number(),
-  notes:           z.string().optional(),
+  accountHeadId: z.string(),
+  month: z.number().int().min(1).max(12),
+  amount: z.number(),
+  notes: z.string().optional(),
 })
 
 // POST /api/actuals — upsert an actual entry (Admin or Finance)
@@ -52,6 +80,16 @@ export async function POST(req: NextRequest) {
   })
   if (period?.status === 'LOCKED') {
     return NextResponse.json({ error: 'Period is locked. Contact Admin to unlock.' }, { status: 409 })
+  }
+
+  // Linear Entry Validation
+  if (month > 1) {
+    const prevPeriod = await prisma.period.findUnique({
+      where: { financialYearId_month: { financialYearId, month: month - 1 } }
+    })
+    if (!prevPeriod?.submittedAt) {
+      return NextResponse.json({ error: `Cannot save actuals for Month ${month} until Month ${month - 1} is closed.` }, { status: 400 })
+    }
   }
 
   const actual = await prisma.actual.upsert({
