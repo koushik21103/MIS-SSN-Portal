@@ -26,7 +26,11 @@ export async function proxy(req: NextRequest) {
 
   // For protected routes, check JWT
   if (pathname.startsWith(PROTECTED_PREFIX)) {
-    const token = await getToken({ req, secret: process.env.AUTH_SECRET! })
+    const token = await getToken({
+      req,
+      secret: process.env.AUTH_SECRET!,
+      secureCookie: process.env.NODE_ENV === 'production',
+    })
 
     // Not logged in → redirect to login
     if (!token) {
