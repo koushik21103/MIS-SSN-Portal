@@ -14,11 +14,13 @@ function getPrisma() {
 }
 
 const loginSchema = z.object({
-  email:    z.string().email(),
+  email: z.email(),
   password: z.string().min(6),
 })
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  secret: process.env.AUTH_SECRET,
+  trustHost: true,
   session: { strategy: 'jwt' },
   pages: {
     signIn: '/login',
@@ -27,7 +29,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     Credentials({
       name: 'credentials',
       credentials: {
-        email:    { label: 'Email',    type: 'email' },
+        email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
@@ -46,10 +48,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           if (!valid) return null
 
           return {
-            id:    user.id,
-            name:  user.name,
+            id: user.id,
+            name: user.name,
             email: user.email,
-            role:  user.role,
+            role: user.role,
           }
         } finally {
           await prisma.$disconnect()
@@ -60,14 +62,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id   = user.id as string
+        token.id = user.id as string
         token.role = (user as any).role as Role
       }
       return token
     },
     async session({ session, token }) {
       if (token) {
-        session.user.id   = token.id as string
+        session.user.id = token.id as string
         session.user.role = token.role as Role
       }
       return session
